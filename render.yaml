@@ -2,6 +2,7 @@ services:
   - type: web
     name: amazon-price-checker
     runtime: node
+    plan: free
     buildCommand: npm install && npm run build
     startCommand: node --import tsx server.ts
     envVars:
@@ -11,3 +12,5 @@ services:
         sync: false
       - key: KEEPA_DOMAIN
         value: "5"
+      - key: PORT
+        value: "10000"
