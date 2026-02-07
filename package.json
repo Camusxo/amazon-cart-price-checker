@@ -2,10 +2,13 @@
   "name": "amazon-price-checker",
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "dev": "concurrently \"npm run server:dev\" \"vite\"",
-    "build": "tsc && vite build",
-    "start": "npm run build && tsx server.ts",
+    "build": "vite build",
+    "start": "npx tsx server.ts",
     "server:dev": "tsx watch server.ts"
   },
   "dependencies": {
