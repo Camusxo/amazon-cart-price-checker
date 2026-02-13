@@ -14,5 +14,7 @@ services:
         value: "5"
       - key: RAKUTEN_APP_ID
         sync: false
+      - key: RAKUTEN_ACCESS_KEY
+        sync: false
       - key: PORT
         value: "10000"

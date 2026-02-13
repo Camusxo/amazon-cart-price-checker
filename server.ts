@@ -90,6 +90,7 @@ const KEEPA_API_KEY = process.env.KEEPA_API_KEY;
 const KEEPA_DOMAIN = Number(process.env.KEEPA_DOMAIN || 5);
 const CACHE_TTL = Number(process.env.CACHE_TTL_SECONDS || 3600);
 const RAKUTEN_APP_ID = process.env.RAKUTEN_APP_ID;
+const RAKUTEN_ACCESS_KEY = process.env.RAKUTEN_ACCESS_KEY;
 
 const DOMAIN_CURRENCY_MAP: Record<number, { currency: string; urlDomain: string }> = {
     1: { currency: 'USD', urlDomain: 'www.amazon.com' },
@@ -436,14 +437,19 @@ const searchRakuten = async (keyword: string): Promise<RakutenProduct[]> => {
     if (!optimizedKeyword) return [];
 
     try {
-        const response = await axios.get('https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601', {
-            params: {
-                applicationId: RAKUTEN_APP_ID,
-                keyword: optimizedKeyword,
-                hits: 30,
-                sort: '+itemPrice',
-                formatVersion: 2,
-            },
+        const params: Record<string, string | number> = {
+            applicationId: RAKUTEN_APP_ID!,
+            keyword: optimizedKeyword,
+            hits: 30,
+            sort: '+itemPrice',
+            formatVersion: 2,
+        };
+        if (RAKUTEN_ACCESS_KEY) {
+            params.accessKey = RAKUTEN_ACCESS_KEY;
+        }
+
+        const response = await axios.get('https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601', {
+            params,
             timeout: 10000,
         });
 
@@ -459,11 +465,16 @@ const searchRakuten = async (keyword: string): Promise<RakutenProduct[]> => {
             genreId: String(item.genreId || ''),
         }));
     } catch (error: unknown) {
-        const err = error as { response?: { status: number; data?: { error_description?: string } } };
+        const err = error as { response?: { status: number; data?: Record<string, unknown> }; message?: string };
+        console.error(`楽天API error: status=${err.response?.status}, data=${JSON.stringify(err.response?.data)}, keyword="${optimizedKeyword}"`);
         if (err.response?.status === 429) {
             throw new Error('RAKUTEN_THROTTLED');
         }
         if (err.response?.status === 404) {
+            return [];
+        }
+        if (err.response?.status === 400) {
+            // 検索結果0件の場合も400が返ることがある
             return [];
         }
         throw error;
@@ -859,5 +870,5 @@ if (process.env.NODE_ENV !== 'development') {
 app.listen(PORT, () => {
     console.log(`サーバー起動: ポート ${PORT}`);
     console.log(`Keepa API: (ドメイン: ${KEEPA_DOMAIN}) ${KEEPA_API_KEY ? '✓ 設定済み' : '✗ 未設定'}`);
-    console.log(`楽天API: ${RAKUTEN_APP_ID ? '✓ 設定済み' : '✗ 未設定'}`);
+    console.log(`楽天API: AppID=${RAKUTEN_APP_ID ? '✓' : '✗'} AccessKey=${RAKUTEN_ACCESS_KEY ? '✓' : '✗'}`);
 });
