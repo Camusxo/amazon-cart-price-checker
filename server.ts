@@ -744,34 +744,120 @@ app.get('/api/status', (_req, res) => {
 // --- 楽天APIテスト ---
 app.get('/api/rakuten-test', async (_req, res) => {
     try {
-        const testKeyword = 'エンポリオ アルマーニ 腕時計';
-        const params: Record<string, string | number> = {
-            applicationId: RAKUTEN_APP_ID || '',
-            keyword: testKeyword,
-            hits: 3,
-            formatVersion: 2,
+        const testKeyword = 'iPhone ケース';
+        const results: Record<string, unknown> = {
+            appId: RAKUTEN_APP_ID ? `${RAKUTEN_APP_ID.slice(0, 8)}...` : 'NOT_SET',
+            accessKey: RAKUTEN_ACCESS_KEY ? `${RAKUTEN_ACCESS_KEY.slice(0, 8)}...` : 'NOT_SET',
         };
-        if (RAKUTEN_ACCESS_KEY) {
-            params.accessKey = RAKUTEN_ACCESS_KEY;
-        }
 
-        console.log('Rakuten test params:', JSON.stringify(params));
+        const NEW_EP = 'https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601';
+        const OLD_EP = 'https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601';
 
-        const headers = { 'Referer': 'https://amazon-price-checker-xohy.onrender.com' };
+        // 試行A: 新EP + Bearer token (Authorization header) + accessKey in params
         try {
-            const res1 = await axios.get('https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601', {
-                params, headers, timeout: 10000,
+            const resA = await axios.get(NEW_EP, {
+                params: {
+                    applicationId: RAKUTEN_APP_ID,
+                    keyword: testKeyword,
+                    hits: 3,
+                    formatVersion: 2,
+                },
+                headers: {
+                    'Authorization': `Bearer ${RAKUTEN_ACCESS_KEY}`,
+                },
+                timeout: 10000,
             });
-            const items = res1.data.Items || res1.data.items || [];
-            res.json({ endpoint: 'new+referer', status: 'OK', count: items.length, firstItem: items[0]?.itemName || items[0]?.ItemName || null });
-            return;
-        } catch (e: unknown) {
-            const err = e as { response?: { status: number; data?: unknown } };
-            res.json({
-                error: { status: err.response?.status, data: err.response?.data },
-                params: { ...params, applicationId: params.applicationId ? '***SET***' : '***MISSING***', accessKey: params.accessKey ? '***SET***' : '***MISSING***' },
-            });
+            const items = resA.data.Items || [];
+            results.attemptA = { method: 'newEP+BearerHeader', status: 'OK', count: items.length, sample: items[0]?.itemName };
+        } catch (eA: unknown) {
+            const err = eA as { response?: { status: number; data?: unknown } };
+            results.attemptA = { method: 'newEP+BearerHeader', status: err.response?.status, error: err.response?.data };
         }
+
+        // 試行B: 新EP + accessKey as query param + Referer
+        try {
+            const resB = await axios.get(NEW_EP, {
+                params: {
+                    applicationId: RAKUTEN_APP_ID,
+                    accessKey: RAKUTEN_ACCESS_KEY,
+                    keyword: testKeyword,
+                    hits: 3,
+                    formatVersion: 2,
+                },
+                headers: {
+                    'Referer': 'https://amazon-price-checker-xohy.onrender.com/',
+                    'Origin': 'https://amazon-price-checker-xohy.onrender.com',
+                },
+                timeout: 10000,
+            });
+            const items = resB.data.Items || [];
+            results.attemptB = { method: 'newEP+queryParams+Referer', status: 'OK', count: items.length, sample: items[0]?.itemName };
+        } catch (eB: unknown) {
+            const err = eB as { response?: { status: number; data?: unknown } };
+            results.attemptB = { method: 'newEP+queryParams+Referer', status: err.response?.status, error: err.response?.data };
+        }
+
+        // 試行C: 新EP + Bearer token + Referer（両方）
+        try {
+            const resC = await axios.get(NEW_EP, {
+                params: {
+                    applicationId: RAKUTEN_APP_ID,
+                    keyword: testKeyword,
+                    hits: 3,
+                    formatVersion: 2,
+                },
+                headers: {
+                    'Authorization': `Bearer ${RAKUTEN_ACCESS_KEY}`,
+                    'Referer': 'https://amazon-price-checker-xohy.onrender.com/',
+                },
+                timeout: 10000,
+            });
+            const items = resC.data.Items || [];
+            results.attemptC = { method: 'newEP+Bearer+Referer', status: 'OK', count: items.length, sample: items[0]?.itemName };
+        } catch (eC: unknown) {
+            const err = eC as { response?: { status: number; data?: unknown } };
+            results.attemptC = { method: 'newEP+Bearer+Referer', status: err.response?.status, error: err.response?.data };
+        }
+
+        // 試行D: 旧EP + applicationId のみ（accessKey無し）
+        try {
+            const resD = await axios.get(OLD_EP, {
+                params: {
+                    applicationId: RAKUTEN_APP_ID,
+                    keyword: testKeyword,
+                    hits: 3,
+                    formatVersion: 2,
+                },
+                timeout: 10000,
+            });
+            const items = resD.data.Items || [];
+            results.attemptD = { method: 'oldEP+appIdOnly', status: 'OK', count: items.length, sample: items[0]?.itemName };
+        } catch (eD: unknown) {
+            const err = eD as { response?: { status: number; data?: unknown } };
+            results.attemptD = { method: 'oldEP+appIdOnly', status: err.response?.status, error: err.response?.data };
+        }
+
+        // 試行E: 新EP + Bearer token のみ（applicationId無し）
+        try {
+            const resE = await axios.get(NEW_EP, {
+                params: {
+                    keyword: testKeyword,
+                    hits: 3,
+                    formatVersion: 2,
+                },
+                headers: {
+                    'Authorization': `Bearer ${RAKUTEN_ACCESS_KEY}`,
+                },
+                timeout: 10000,
+            });
+            const items = resE.data.Items || [];
+            results.attemptE = { method: 'newEP+BearerOnly(noAppId)', status: 'OK', count: items.length, sample: items[0]?.itemName };
+        } catch (eE: unknown) {
+            const err = eE as { response?: { status: number; data?: unknown } };
+            results.attemptE = { method: 'newEP+BearerOnly(noAppId)', status: err.response?.status, error: err.response?.data };
+        }
+
+        res.json(results);
     } catch (error: unknown) {
         const err = error as { message?: string };
         res.status(500).json({ error: err.message });
