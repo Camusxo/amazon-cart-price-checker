@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import Papa from 'papaparse';
 import {
@@ -24,12 +24,15 @@ interface ExtendedRunSession extends RunSession {
 const RunPage: React.FC = () => {
     const { runId } = useParams();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const autoCompare = searchParams.get('autoCompare') === 'true';
     const [data, setData] = useState<ExtendedRunSession | null>(null);
     const [filterStatus, setFilterStatus] = useState<string>('ALL');
     const [search, setSearch] = useState('');
     const [showLogs, setShowLogs] = useState(false);
     const [loading, setLoading] = useState(true);
     const [startingCompare, setStartingCompare] = useState(false);
+    const [autoCompareTriggered, setAutoCompareTriggered] = useState(false);
 
     const fetchData = async () => {
         try {
@@ -50,6 +53,17 @@ const RunPage: React.FC = () => {
         }, 2000);
         return () => clearInterval(interval);
     }, [runId, data?.isRunning]);
+
+    // autoCompare=true の場合、Keepa処理が一定数完了したら自動的に楽天比較を開始
+    useEffect(() => {
+        if (autoCompare && !autoCompareTriggered && data && !startingCompare) {
+            // 処理完了 or 成功件数が5件以上の場合に自動開始
+            if (!data.isRunning || data.stats.success >= 5) {
+                setAutoCompareTriggered(true);
+                handleStartCompareNow();
+            }
+        }
+    }, [autoCompare, autoCompareTriggered, data, startingCompare]);
 
     const handleRetry = async () => {
         if (!runId) return;
@@ -263,6 +277,20 @@ const RunPage: React.FC = () => {
                         )}
                     </div>
                 </div>
+
+                {autoCompare && !autoCompareTriggered && (
+                    <div className="bg-indigo-50 border border-indigo-200 text-indigo-700 p-4 rounded-lg flex items-center gap-3 mb-4">
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span className="font-medium">Keepa処理完了後、自動的に楽天比較を開始します...</span>
+                    </div>
+                )}
+
+                {autoCompare && autoCompareTriggered && (
+                    <div className="bg-indigo-50 border border-indigo-200 text-indigo-700 p-4 rounded-lg flex items-center gap-3 mb-4">
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span className="font-medium">楽天比較を開始しています。まもなく比較ページに遷移します...</span>
+                    </div>
+                )}
 
                 {hasOriginalCsv && (
                     <div className="bg-green-50 border border-green-100 rounded-lg p-3 mb-4">

@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
-import { Upload, FileText, AlertCircle, Play, Loader2, Info, Search as SearchIcon, CheckSquare, Square as SquareIcon } from 'lucide-react';
+import { Upload, FileText, AlertCircle, Loader2, Info, Search as SearchIcon, CheckSquare, Square as SquareIcon, GitCompareArrows, Zap } from 'lucide-react';
 import axios from 'axios';
 import { OriginalCsvData, OriginalRowData } from '../types';
 
@@ -133,12 +133,15 @@ const ImportPage: React.FC = () => {
         setKeepaResults(prev => prev.map(r => ({ ...r, selected: !allSelected })));
     };
 
-    const handleStartFromText = async () => {
+    const handleStartFromText = async (autoCompare: boolean = false) => {
         if (textAsins.length === 0) return;
         setIsLoading(true);
         try {
             const res = await axios.post('/api/runs', { asins: textAsins });
-            navigate(`/results/${res.data.runId}`);
+            const url = autoCompare
+                ? `/results/${res.data.runId}?autoCompare=true`
+                : `/results/${res.data.runId}`;
+            navigate(url);
         } catch (err: unknown) {
             const error = err as { response?: { data?: { error?: string } } };
             setError(error.response?.data?.error || '処理開始に失敗しました');
@@ -146,13 +149,16 @@ const ImportPage: React.FC = () => {
         }
     };
 
-    const handleStartFromKeepa = async () => {
+    const handleStartFromKeepa = async (autoCompare: boolean = false) => {
         const selected = keepaResults.filter(r => r.selected);
         if (selected.length === 0) return;
         setIsLoading(true);
         try {
             const res = await axios.post('/api/runs', { asins: selected.map(r => r.asin) });
-            navigate(`/results/${res.data.runId}`);
+            const url = autoCompare
+                ? `/results/${res.data.runId}?autoCompare=true`
+                : `/results/${res.data.runId}`;
+            navigate(url);
         } catch (err: unknown) {
             const error = err as { response?: { data?: { error?: string } } };
             setError(error.response?.data?.error || '処理開始に失敗しました');
@@ -396,7 +402,7 @@ const ImportPage: React.FC = () => {
         }
     }, []);
 
-    const handleStart = async () => {
+    const handleStart = async (autoCompare: boolean = false) => {
         if (!file || !originalCsvData) return;
         setIsLoading(true);
 
@@ -411,7 +417,10 @@ const ImportPage: React.FC = () => {
                     rows: originalCsvData.rows,
                 },
             });
-            navigate(`/results/${res.data.runId}`);
+            const url = autoCompare
+                ? `/results/${res.data.runId}?autoCompare=true`
+                : `/results/${res.data.runId}`;
+            navigate(url);
         } catch (err: unknown) {
             const error = err as { response?: { data?: { error?: string } } };
             setError(error.response?.data?.error || 'サーバーでの処理開始に失敗しました。');
@@ -557,11 +566,11 @@ const ImportPage: React.FC = () => {
                                     </table>
                                 </div>
 
-                                <div className="mt-6 flex justify-end">
+                                <div className="mt-6 flex justify-end gap-3">
                                     <button
-                                        onClick={handleStart}
+                                        onClick={() => handleStart(true)}
                                         disabled={isLoading || stats.unique === 0}
-                                        className="bg-amazon-orange hover:bg-yellow-500 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
                                         {isLoading ? (
                                             <>
@@ -569,9 +578,16 @@ const ImportPage: React.FC = () => {
                                             </>
                                         ) : (
                                             <>
-                                                価格チェック開始 <Play className="w-5 h-5 fill-current" />
+                                                <GitCompareArrows className="w-5 h-5" /> 楽天比較開始
                                             </>
                                         )}
+                                    </button>
+                                    <button
+                                        onClick={() => handleStart(false)}
+                                        disabled={isLoading || stats.unique === 0}
+                                        className="bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 px-5 py-2.5 rounded-lg font-medium text-sm shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        <Zap className="w-4 h-4" /> カート価格のみ（高速）
                                     </button>
                                 </div>
                             </div>
@@ -643,10 +659,14 @@ const ImportPage: React.FC = () => {
                                     </table>
                                 </div>
 
-                                <div className="mt-6 flex justify-end">
-                                    <button onClick={handleStartFromText} disabled={isLoading || textAsins.length === 0}
-                                        className="bg-amazon-orange hover:bg-yellow-500 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                                        {isLoading ? <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</> : <>価格チェック開始 <Play className="w-5 h-5 fill-current" /></>}
+                                <div className="mt-6 flex justify-end gap-3">
+                                    <button onClick={() => handleStartFromText(true)} disabled={isLoading || textAsins.length === 0}
+                                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                        {isLoading ? <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</> : <><GitCompareArrows className="w-5 h-5" /> 楽天比較開始</>}
+                                    </button>
+                                    <button onClick={() => handleStartFromText(false)} disabled={isLoading || textAsins.length === 0}
+                                        className="bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 px-5 py-2.5 rounded-lg font-medium text-sm shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                        <Zap className="w-4 h-4" /> カート価格のみ（高速）
                                     </button>
                                 </div>
                             </div>
@@ -726,10 +746,14 @@ const ImportPage: React.FC = () => {
                                 </table>
                             </div>
 
-                            <div className="p-4 border-t border-slate-200 flex justify-end">
-                                <button onClick={handleStartFromKeepa} disabled={isLoading || keepaResults.filter(r => r.selected).length === 0}
-                                    className="bg-amazon-orange hover:bg-yellow-500 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                                    {isLoading ? <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</> : <>選択した{keepaResults.filter(r => r.selected).length}件で価格チェック開始 <Play className="w-5 h-5 fill-current" /></>}
+                            <div className="p-4 border-t border-slate-200 flex justify-end gap-3">
+                                <button onClick={() => handleStartFromKeepa(true)} disabled={isLoading || keepaResults.filter(r => r.selected).length === 0}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    {isLoading ? <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</> : <><GitCompareArrows className="w-5 h-5" /> 選択した{keepaResults.filter(r => r.selected).length}件で楽天比較開始</>}
+                                </button>
+                                <button onClick={() => handleStartFromKeepa(false)} disabled={isLoading || keepaResults.filter(r => r.selected).length === 0}
+                                    className="bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 px-5 py-2.5 rounded-lg font-medium text-sm shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <Zap className="w-4 h-4" /> カート価格のみ（高速）
                                 </button>
                             </div>
                         </div>
