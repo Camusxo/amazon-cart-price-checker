@@ -73,12 +73,43 @@ const ImportPage: React.FC = () => {
         setOriginalCsvData(null);
 
         Papa.parse(uploadedFile, {
-            header: true,
+            header: false,
             skipEmptyLines: true,
-            transformHeader: (header) => header.trim(),
-            complete: (results) => {
-                const rows = results.data as Record<string, string>[];
-                const headers = results.meta.fields || [];
+            complete: (rawResults) => {
+                let rawRows = rawResults.data as string[][];
+
+                // 先頭の空行をスキップして実際のヘッダー行を見つける
+                let headerRowIndex = 0;
+                while (headerRowIndex < rawRows.length) {
+                    const row = rawRows[headerRowIndex];
+                    const hasContent = row.some(cell => cell && cell.trim().length > 0);
+                    if (hasContent) break;
+                    headerRowIndex++;
+                }
+
+                if (headerRowIndex >= rawRows.length) {
+                    setError('CSVファイルにデータが見つかりません。');
+                    setFile(null);
+                    return;
+                }
+
+                // ヘッダー行を取得
+                const rawHeaders = rawRows[headerRowIndex].map(h => h.trim());
+                const dataRows = rawRows.slice(headerRowIndex + 1);
+
+                // Record形式に変換
+                const headers = rawHeaders.filter(h => h.length > 0);
+                const rows: Record<string, string>[] = dataRows
+                    .filter(row => row.some(cell => cell && cell.trim().length > 0))
+                    .map(row => {
+                        const obj: Record<string, string> = {};
+                        rawHeaders.forEach((header, i) => {
+                            if (header.length > 0) {
+                                obj[header] = (row[i] || '').trim();
+                            }
+                        });
+                        return obj;
+                    });
 
                 if (headers.length === 0) {
                     setError('CSVファイルにヘッダーが見つかりません。');
@@ -108,8 +139,66 @@ const ImportPage: React.FC = () => {
                         }
                     }
 
-                    if (bestColumn && bestCount > rows.length * 0.3) {
+                    // 10%以上の行がASINなら採用（閾値を下げて検出率向上）
+                    if (bestColumn && bestCount >= Math.max(1, rows.length * 0.1)) {
                         asinColumnKey = bestColumn;
+                    }
+                }
+
+                // ヘッダー自体がASINの場合（ヘッダーなしCSV）→ ヘッダーを含めて再パース
+                if (!asinColumnKey) {
+                    for (const header of headers) {
+                        if (isValidAsin(header)) {
+                            // ヘッダーなしCSVを再パース
+                            Papa.parse(uploadedFile, {
+                                header: false,
+                                skipEmptyLines: true,
+                                complete: (noHeaderResults) => {
+                                    const noHeaderRows = noHeaderResults.data as string[][];
+                                    const validAsins: string[] = [];
+                                    const seenAsins = new Set<string>();
+                                    const validRowData: OriginalRowData[] = [];
+
+                                    noHeaderRows.forEach((row, index) => {
+                                        // 各行の各列からASINを探す
+                                        for (const cell of row) {
+                                            const trimmed = cell?.trim();
+                                            if (isValidAsin(trimmed)) {
+                                                validAsins.push(trimmed);
+                                                if (!seenAsins.has(trimmed)) {
+                                                    seenAsins.add(trimmed);
+                                                    const rowObj: Record<string, string> = {};
+                                                    row.forEach((v, ci) => { rowObj[`col${ci}`] = v; });
+                                                    validRowData.push({ rowIndex: index, originalRow: rowObj, asin: trimmed });
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    });
+
+                                    if (seenAsins.size === 0) {
+                                        setError('ASIN列が見つかりません。「asin」「備考（ASIN）」などの列ヘッダーを含むCSVファイルをアップロードしてください。');
+                                        setFile(null);
+                                        return;
+                                    }
+
+                                    setDetectedAsinColumn('自動検出（ヘッダーなし）');
+                                    setStats({ total: noHeaderRows.length, unique: seenAsins.size, duplicates: validAsins.length - seenAsins.size, empty: noHeaderRows.length - validAsins.length });
+                                    setPreview(validRowData.slice(0, 5).map(r => ({ rowNum: r.rowIndex + 1, asin: r.asin })));
+                                    setOriginalCsvData({ headers: ['ASIN'], asinColumn: 'ASIN', priceColumn: null, rows: validRowData });
+                                },
+                            });
+                            return; // 再パース中なのでここで抜ける
+                        }
+                    }
+                }
+
+                // 1列しかないCSVの場合、その列を使う
+                if (!asinColumnKey && headers.length === 1) {
+                    const onlyHeader = headers[0];
+                    const validCount = rows.filter(row => isValidAsin(row[onlyHeader])).length;
+                    if (validCount >= 1) {
+                        asinColumnKey = onlyHeader;
                     }
                 }
 
