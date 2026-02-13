@@ -70,6 +70,7 @@ interface KeepaProduct {
     csv?: number[][];
     lastUpdate?: number;
     eanList?: string[];          // JANコード（EAN）リスト
+    upcList?: string[];          // UPCコードリスト（EAN変換でJAN取得可能）
     salesRankDrops30?: number;   // 30日間の売上ランク降下数 ≒ 月間販売個数
 }
 
@@ -159,6 +160,7 @@ interface ComparisonItem {
     monthlySold: number | null;
     memo: string;
     rakutenCandidates: RakutenCandidate[];  // 上位2〜3件の楽天候補
+    favorite: boolean;    // お気に入りフラグ
 }
 
 interface ComparisonSession {
@@ -242,6 +244,28 @@ const extractCurrentPrice = (csvData: number[][] | undefined, domainId: number):
     return null;
 };
 
+// --- JANコード抽出（取得率向上） ---
+const extractJanCode = (product: KeepaProduct): string | null => {
+    // 1. eanList から日本JANコード（45xxxx / 49xxxx）を優先検索
+    if (product.eanList && product.eanList.length > 0) {
+        const japanJan = product.eanList.find(e => e.startsWith('45') || e.startsWith('49'));
+        if (japanJan) return japanJan;
+        // 日本JANがなければ最初のEANを返す
+        return product.eanList[0];
+    }
+    // 2. upcList からEAN変換（UPC 12桁 → 先頭に0を付けて13桁EAN）
+    if (product.upcList && product.upcList.length > 0) {
+        for (const upc of product.upcList) {
+            const ean = upc.length === 12 ? '0' + upc : upc;
+            if (ean.startsWith('45') || ean.startsWith('49')) return ean;
+        }
+        // 日本JANでなくても最初のUPC変換を返す
+        const firstEan = product.upcList[0].length === 12 ? '0' + product.upcList[0] : product.upcList[0];
+        return firstEan;
+    }
+    return null;
+};
+
 // --- Keepa API ロジック ---
 
 const fetchFromKeepa = async (asins: string[], runId: string): Promise<ProductResult[]> => {
@@ -292,7 +316,7 @@ const fetchFromKeepa = async (asins: string[], runId: string): Promise<ProductRe
                     detailUrl: `https://${domainInfo.urlDomain}/dp/${product.asin}`,
                     fetchedAt: new Date().toISOString(),
                     status: hasPrice ? ItemStatus.OK : ItemStatus.NO_OFFER,
-                    janCode: product.eanList?.[0] || null,
+                    janCode: extractJanCode(product) || null,
                     monthlySold: product.salesRankDrops30 || null,
                 });
             });
@@ -770,6 +794,19 @@ app.get('/api/history', (_req, res) => {
     res.json(history);
 });
 
+// Keepa処理を途中で完了（処理済み結果をそのまま使う）
+app.post('/api/runs/:runId/stop', (req, res) => {
+    const { runId } = req.params;
+    const run = runs[runId];
+    if (!run) { res.status(404).json({ error: '実行セッションが見つかりません' }); return; }
+    if (!run.isRunning) { res.json({ message: '既に停止しています' }); return; }
+    run.isRunning = false;
+    run.queue = [];
+    run.stats.endTime = Date.now();
+    run.logs.unshift(`[${new Date().toLocaleTimeString()}] ユーザーにより処理を停止`);
+    res.json({ message: '処理を停止しました', processed: run.stats.processed, total: run.stats.total });
+});
+
 app.get('/api/status', (_req, res) => {
     res.json({
         apiConfigured: !!KEEPA_API_KEY,
@@ -831,6 +868,7 @@ app.post('/api/compare', (req, res) => {
         monthlySold: item.monthlySold || null,
         memo: '',
         rakutenCandidates: [],
+        favorite: false,
     }));
 
     comparisons[compareId] = {
@@ -858,6 +896,63 @@ app.post('/api/compare', (req, res) => {
     res.json({ compareId });
 });
 
+// 処理途中のRunからでも即座に比較を開始（完了を待たない）
+app.post('/api/compare-now', (req, res) => {
+    const { runId } = req.body;
+    if (!runId) { res.status(400).json({ error: 'runIdが必要です' }); return; }
+    const run = runs[runId];
+    if (!run) { res.status(404).json({ error: '実行セッションが見つかりません' }); return; }
+    if (!RAKUTEN_APP_ID) { res.status(500).json({ error: 'RAKUTEN_APP_IDが設定されていません' }); return; }
+
+    // 現時点でOKの商品のみ（処理途中でもOK）
+    const okItems = run.items.filter(i => i.status === ItemStatus.OK && i.priceAmount && i.title);
+    if (okItems.length === 0) {
+        res.status(400).json({ error: '比較可能な商品がありません（価格取得済みの商品が必要です）' });
+        return;
+    }
+
+    const compareId = uuidv4();
+    const comparisonItems: ComparisonItem[] = okItems.map(item => ({
+        asin: item.asin,
+        amazonTitle: item.title!,
+        amazonPrice: item.priceAmount!,
+        amazonUrl: item.detailUrl || `https://www.amazon.co.jp/dp/${item.asin}`,
+        rakutenTitle: null,
+        rakutenPrice: null,
+        rakutenUrl: null,
+        rakutenShop: null,
+        rakutenImageUrl: null,
+        rakutenPointRate: 1,
+        similarityScore: 0,
+        priceDiff: null,
+        priceDiffPercent: null,
+        estimatedFee: estimateAmazonFee(item.priceAmount!),
+        estimatedProfit: null,
+        profitRate: null,
+        status: 'PENDING' as ComparisonStatus,
+        janCode: item.janCode || null,
+        monthlySold: item.monthlySold || null,
+        memo: '',
+        rakutenCandidates: [],
+        favorite: false,
+    }));
+
+    comparisons[compareId] = {
+        id: compareId,
+        runId,
+        createdAt: Date.now(),
+        items: comparisonItems,
+        isRunning: true,
+        stats: { total: comparisonItems.length, processed: 0, matched: 0, profitable: 0 },
+    };
+
+    const sortedIds = Object.keys(comparisons).sort((a, b) => comparisons[b].createdAt - comparisons[a].createdAt);
+    if (sortedIds.length > 5) { delete comparisons[sortedIds[sortedIds.length - 1]]; }
+
+    processComparisonQueue(compareId);
+    res.json({ compareId, itemCount: okItems.length });
+});
+
 app.get('/api/compare/:compareId', (req, res) => {
     const { compareId } = req.params;
     const session = comparisons[compareId];
@@ -877,6 +972,40 @@ app.patch('/api/compare/:compareId/items/:asin/memo', (req, res) => {
     if (!item) { res.status(404).json({ error: '商品が見つかりません' }); return; }
     item.memo = typeof memo === 'string' ? memo.slice(0, 200) : '';
     res.json({ ok: true });
+});
+
+// 比較処理を停止
+app.post('/api/compare/:compareId/stop', (req, res) => {
+    const { compareId } = req.params;
+    const session = comparisons[compareId];
+    if (!session) { res.status(404).json({ error: '比較セッションが見つかりません' }); return; }
+    if (!session.isRunning) { res.json({ message: '既に停止しています' }); return; }
+    session.isRunning = false;
+    res.json({ message: '比較処理を停止しました', processed: session.stats.processed, total: session.stats.total });
+});
+
+// 比較処理を再開（未処理のPENDINGアイテムを続行）
+app.post('/api/compare/:compareId/resume', (req, res) => {
+    const { compareId } = req.params;
+    const session = comparisons[compareId];
+    if (!session) { res.status(404).json({ error: '比較セッションが見つかりません' }); return; }
+    if (session.isRunning) { res.status(400).json({ error: '現在処理中です' }); return; }
+    const pendingCount = session.items.filter(i => i.status === 'PENDING').length;
+    if (pendingCount === 0) { res.json({ message: '未処理の商品がありません' }); return; }
+    session.isRunning = true;
+    processComparisonQueue(compareId);
+    res.json({ message: `${pendingCount}件の商品の比較を再開`, pending: pendingCount });
+});
+
+// お気に入りトグル
+app.patch('/api/compare/:compareId/items/:asin/favorite', (req, res) => {
+    const { compareId, asin } = req.params;
+    const session = comparisons[compareId];
+    if (!session) { res.status(404).json({ error: '比較セッションが見つかりません' }); return; }
+    const item = session.items.find(i => i.asin === asin);
+    if (!item) { res.status(404).json({ error: '商品が見つかりません' }); return; }
+    item.favorite = !item.favorite;
+    res.json({ ok: true, favorite: item.favorite });
 });
 
 app.post('/api/compare/:compareId/refresh', (req, res) => {

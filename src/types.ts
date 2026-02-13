@@ -112,6 +112,7 @@ export interface ComparisonItem {
   monthlySold: number | null;
   memo: string;
   rakutenCandidates: RakutenCandidate[];
+  favorite: boolean;
 }
 
 export interface ComparisonStats {

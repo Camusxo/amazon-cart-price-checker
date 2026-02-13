@@ -11,8 +11,11 @@ import {
     ChevronLeft,
     ChevronRight,
     X,
+    Star,
+    Square,
+    Play,
 } from 'lucide-react';
-import { ComparisonSession, ComparisonItem, RakutenCandidate } from '../types';
+import { ComparisonSession, ComparisonItem } from '../types';
 import { formatCurrency } from '../lib/utils';
 
 const ComparePage: React.FC = () => {
@@ -28,6 +31,7 @@ const ComparePage: React.FC = () => {
     const [maxPrice, setMaxPrice] = useState<string>('');
     const [statusFilter, setStatusFilter] = useState<string>('ALL');
     const [showFilterPanel, setShowFilterPanel] = useState(false);
+    const [showFavoriteOnly, setShowFavoriteOnly] = useState(false);
 
     // ページネーション
     const [pageSize, setPageSize] = useState(50);
@@ -68,6 +72,30 @@ const ComparePage: React.FC = () => {
         }
     };
 
+    const handleStop = async () => {
+        if (!compareId) return;
+        try {
+            await axios.post(`/api/compare/${compareId}/stop`);
+            fetchData();
+        } catch { alert('停止に失敗しました'); }
+    };
+
+    const handleResume = async () => {
+        if (!compareId) return;
+        try {
+            await axios.post(`/api/compare/${compareId}/resume`);
+            fetchData();
+        } catch { alert('再開に失敗しました'); }
+    };
+
+    const toggleFavorite = async (asin: string) => {
+        if (!compareId) return;
+        try {
+            await axios.patch(`/api/compare/${compareId}/items/${asin}/favorite`);
+            fetchData();
+        } catch { /* silent */ }
+    };
+
     // ショートカットプリセット
     const applyPreset = (preset: string) => {
         setKeyword('');
@@ -105,6 +133,7 @@ const ComparePage: React.FC = () => {
     const filteredItems = useMemo(() => {
         if (!data) return [];
         return data.items.filter(item => {
+            if (showFavoriteOnly && !item.favorite) return false;
             if (keyword) {
                 const kw = keyword.toLowerCase();
                 const matchTitle = item.amazonTitle.toLowerCase().includes(kw) ||
@@ -120,7 +149,7 @@ const ComparePage: React.FC = () => {
             if (maxPrice && item.amazonPrice > Number(maxPrice)) return false;
             return true;
         });
-    }, [data, keyword, statusFilter, minProfit, minProfitRate, minPrice, maxPrice]);
+    }, [data, keyword, statusFilter, minProfit, minProfitRate, minPrice, maxPrice, showFavoriteOnly]);
 
     // ソート
     const sortedItems = useMemo(() => {
@@ -218,6 +247,18 @@ const ComparePage: React.FC = () => {
                         </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
+                        {data.isRunning && (
+                            <>
+                                <button onClick={handleStop} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors">
+                                    <Square className="w-3.5 h-3.5" /> 処理を完了
+                                </button>
+                            </>
+                        )}
+                        {!data.isRunning && data.items.some(i => i.status === 'PENDING') && (
+                            <button onClick={handleResume} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-500 hover:bg-green-600 rounded-lg transition-colors">
+                                <Play className="w-3.5 h-3.5" /> 再開
+                            </button>
+                        )}
                         {!data.isRunning && (
                             <button onClick={handleRefresh} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors border border-indigo-200">
                                 <RefreshCw className="w-3.5 h-3.5" /> 再取得
@@ -254,6 +295,7 @@ const ComparePage: React.FC = () => {
                 <QuickButton label="利益率10%以上" active={minProfitRate === '10'} onClick={() => applyPreset('rate10')} />
                 <QuickButton label="利益率20%以上" active={minProfitRate === '20'} onClick={() => applyPreset('rate20')} />
                 <QuickButton label="マッチ商品のみ" active={statusFilter === 'MATCHED'} onClick={() => applyPreset('matched')} />
+                <QuickButton label="⭐ お気に入り" active={showFavoriteOnly} onClick={() => setShowFavoriteOnly(!showFavoriteOnly)} />
                 <div className="ml-auto flex items-center gap-2">
                     <span className="text-xs text-slate-400">表示件数</span>
                     <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
@@ -319,27 +361,28 @@ const ComparePage: React.FC = () => {
                     <table className="w-full text-left text-xs">
                         <thead className="bg-sky-50 border-b border-sky-200">
                             <tr>
-                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap">商品画像</th>
-                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap">ASIN</th>
-                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap w-[200px]">Keepa</th>
-                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap min-w-[250px]">商品名</th>
+                                <th className="px-2 py-2.5 font-bold text-sky-800 whitespace-nowrap border-r border-sky-200 w-8">★</th>
+                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap border-r border-sky-200">商品画像</th>
+                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap border-r border-sky-200">ASIN</th>
+                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap w-[200px] border-r border-sky-200">Keepa</th>
+                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap min-w-[250px] border-r border-sky-200">商品名</th>
                                 <SortHeader label="楽天仕入れ価格" sortKey="rakutenPrice" currentKey={sortKey} dir={sortDir} onClick={handleSort} />
                                 <SortHeader label="Amazon販売価格" sortKey="amazonPrice" currentKey={sortKey} dir={sortDir} onClick={handleSort} />
-                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap">Amazon手数料</th>
-                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap">獲得ポイント</th>
-                                <SortHeader label="利益" sortKey="profitRate" currentKey={sortKey} dir={sortDir} onClick={handleSort} />
+                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap border-r border-sky-200">Amazon手数料</th>
+                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap border-r border-sky-200">獲得ポイント</th>
+                                <SortHeader label="利益" sortKey="profitRate" currentKey={sortKey} dir={sortDir} onClick={handleSort} isLast />
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-200">
                             {paginatedItems.length === 0 ? (
                                 <tr>
-                                    <td colSpan={9} className="p-8 text-center text-slate-400">
+                                    <td colSpan={10} className="p-8 text-center text-slate-400">
                                         {data.isRunning ? '楽天商品を検索中...' : '条件に一致する商品がありません'}
                                     </td>
                                 </tr>
                             ) : (
                                 paginatedItems.map(item => (
-                                    <ProductRow key={item.asin} item={item} onPreview={() => setPreviewItem(item)} compareId={compareId || ''} />
+                                    <ProductRow key={item.asin} item={item} onPreview={() => setPreviewItem(item)} compareId={compareId || ''} onToggleFavorite={() => toggleFavorite(item.asin)} />
                                 ))
                             )}
                         </tbody>
@@ -412,12 +455,12 @@ function QuickButton({ label, active, onClick }: { label: string; active: boolea
     );
 }
 
-function SortHeader({ label, sortKey, currentKey, dir, onClick }: {
-    label: string; sortKey: string; currentKey: string; dir: 'asc' | 'desc'; onClick: (key: string) => void;
+function SortHeader({ label, sortKey, currentKey, dir, onClick, isLast = false }: {
+    label: string; sortKey: string; currentKey: string; dir: 'asc' | 'desc'; onClick: (key: string) => void; isLast?: boolean;
 }) {
     const isActive = sortKey === currentKey;
     return (
-        <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap cursor-pointer select-none hover:bg-sky-100 transition-colors"
+        <th className={`px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap cursor-pointer select-none hover:bg-sky-100 transition-colors ${!isLast ? 'border-r border-sky-200' : ''}`}
             onClick={() => onClick(sortKey)}>
             <span className="flex items-center gap-0.5">
                 {label}
@@ -428,7 +471,7 @@ function SortHeader({ label, sortKey, currentKey, dir, onClick }: {
 }
 
 // ===== PoiPoi風 商品行 =====
-function ProductRow({ item, onPreview, compareId }: { item: ComparisonItem; onPreview: () => void; compareId: string }) {
+function ProductRow({ item, onPreview, compareId, onToggleFavorite }: { item: ComparisonItem; onPreview: () => void; compareId: string; onToggleFavorite: () => void }) {
     const isMatched = item.status === 'MATCHED';
     const isProfitable = item.estimatedProfit !== null && item.estimatedProfit > 0;
     const rakutenPoints = item.rakutenPrice ? Math.round(item.rakutenPrice * (item.rakutenPointRate / 100)) : 0;
@@ -439,8 +482,14 @@ function ProductRow({ item, onPreview, compareId }: { item: ComparisonItem; onPr
 
     return (
         <tr className={`hover:bg-slate-50/80 transition-colors ${isProfitable && isMatched ? 'bg-green-50/30' : ''}`}>
+            {/* お気に入り */}
+            <td className="px-2 py-3 align-top text-center border-r border-slate-200">
+                <button onClick={onToggleFavorite} className="inline-block">
+                    <Star className={`w-5 h-5 transition-colors ${item.favorite ? 'fill-yellow-400 text-yellow-400' : 'text-slate-300 hover:text-yellow-400'}`} />
+                </button>
+            </td>
             {/* 商品画像 */}
-            <td className="px-3 py-3 align-top">
+            <td className="px-3 py-3 align-top border-r border-slate-200">
                 {item.rakutenImageUrl && isMatched ? (
                     <img src={item.rakutenImageUrl} alt="" className="w-16 h-16 object-contain rounded border border-slate-200 bg-white cursor-pointer hover:scale-105 transition-transform"
                         onClick={onPreview} />
@@ -460,10 +509,10 @@ function ProductRow({ item, onPreview, compareId }: { item: ComparisonItem; onPr
             </td>
 
             {/* ASIN */}
-            <td className="px-3 py-3 align-top">
-                <div className="font-mono text-[11px] font-bold text-slate-700">{item.asin}</div>
+            <td className="px-3 py-3 align-top border-r border-slate-200">
+                <div className="font-mono text-[11px] font-bold text-indigo-700">ASIN: {item.asin}</div>
                 {item.janCode && (
-                    <div className="text-[9px] text-slate-400 mt-0.5">JAN {item.janCode}</div>
+                    <div className="font-mono text-[11px] font-bold text-emerald-700 mt-0.5">JAN: {item.janCode}</div>
                 )}
                 {item.monthlySold !== null && item.monthlySold > 0 && (
                     <div className="mt-1 px-1.5 py-0.5 bg-blue-50 text-blue-700 text-[9px] font-medium rounded inline-block">
@@ -499,7 +548,7 @@ function ProductRow({ item, onPreview, compareId }: { item: ComparisonItem; onPr
             </td>
 
             {/* Keepa チャート */}
-            <td className="px-3 py-3 align-top">
+            <td className="px-3 py-3 align-top border-r border-slate-200">
                 <img
                     src={keepaChartUrl}
                     alt="Keepa"
@@ -513,7 +562,7 @@ function ProductRow({ item, onPreview, compareId }: { item: ComparisonItem; onPr
             </td>
 
             {/* 商品名（Amazon + 楽天バッジ） */}
-            <td className="px-3 py-3 align-top min-w-[250px] max-w-[350px]">
+            <td className="px-3 py-3 align-top min-w-[250px] max-w-[350px] border-r border-slate-200">
                 {/* Amazon */}
                 <div className="mb-2">
                     <span className="inline-block px-1.5 py-0.5 bg-amber-500 text-white text-[9px] font-bold rounded mr-1">Amazon</span>
@@ -555,7 +604,7 @@ function ProductRow({ item, onPreview, compareId }: { item: ComparisonItem; onPr
             </td>
 
             {/* 楽天仕入れ価格 */}
-            <td className="px-3 py-3 align-top whitespace-nowrap text-right">
+            <td className="px-3 py-3 align-top whitespace-nowrap text-right border-r border-slate-200">
                 {item.rakutenPrice !== null ? (
                     <div className="text-sm font-bold text-slate-800">{formatCurrency(item.rakutenPrice, 'JPY')}</div>
                 ) : (
@@ -564,17 +613,17 @@ function ProductRow({ item, onPreview, compareId }: { item: ComparisonItem; onPr
             </td>
 
             {/* Amazon販売価格 */}
-            <td className="px-3 py-3 align-top whitespace-nowrap text-right">
+            <td className="px-3 py-3 align-top whitespace-nowrap text-right border-r border-slate-200">
                 <div className="text-sm font-bold text-slate-800">{formatCurrency(item.amazonPrice, 'JPY')}</div>
             </td>
 
             {/* Amazon手数料 */}
-            <td className="px-3 py-3 align-top whitespace-nowrap text-right">
+            <td className="px-3 py-3 align-top whitespace-nowrap text-right border-r border-slate-200">
                 <div className="text-sm text-slate-600">{formatCurrency(item.estimatedFee, 'JPY')}</div>
             </td>
 
             {/* 獲得ポイント */}
-            <td className="px-3 py-3 align-top whitespace-nowrap text-right">
+            <td className="px-3 py-3 align-top whitespace-nowrap text-right border-r border-slate-200">
                 {isMatched && rakutenPoints > 0 ? (
                     <div className="text-sm text-orange-600 font-medium">{formatCurrency(rakutenPoints, 'JPY')}</div>
                 ) : (

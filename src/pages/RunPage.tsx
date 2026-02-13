@@ -12,6 +12,7 @@ import {
     FilePlus,
     GitCompareArrows,
     Loader2,
+    Square,
 } from 'lucide-react';
 import { RunSession, ItemStatus, OriginalCsvData } from '../types';
 import { getStatusColor, formatCurrency } from '../lib/utils';
@@ -65,6 +66,29 @@ const RunPage: React.FC = () => {
         setStartingCompare(true);
         try {
             const res = await axios.post('/api/compare', { runId });
+            navigate(`/compare/${res.data.compareId}`);
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { error?: string } } };
+            alert(error.response?.data?.error || '楽天比較の開始に失敗しました');
+            setStartingCompare(false);
+        }
+    };
+
+    const handleStopRun = async () => {
+        if (!runId) return;
+        try {
+            await axios.post(`/api/runs/${runId}/stop`);
+            fetchData();
+        } catch {
+            alert('停止に失敗しました');
+        }
+    };
+
+    const handleStartCompareNow = async () => {
+        if (!runId) return;
+        setStartingCompare(true);
+        try {
+            const res = await axios.post('/api/compare-now', { runId });
             navigate(`/compare/${res.data.compareId}`);
         } catch (err: unknown) {
             const error = err as { response?: { data?: { error?: string } } };
@@ -193,12 +217,27 @@ const RunPage: React.FC = () => {
                         </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
+                        {/* 処理中の制御ボタン */}
+                        {data.isRunning && (
+                            <>
+                                <button onClick={handleStopRun}
+                                    className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-red-500 hover:bg-red-600 rounded-md transition-colors">
+                                    <Square className="w-4 h-4" /> 処理を完了
+                                </button>
+                                <button onClick={handleStartCompareNow} disabled={startingCompare}
+                                    className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors disabled:opacity-50">
+                                    {startingCompare ? (
+                                        <><Loader2 className="w-4 h-4 animate-spin" /> 開始中...</>
+                                    ) : (
+                                        <><GitCompareArrows className="w-4 h-4" /> 途中で楽天比較を開始</>
+                                    )}
+                                </button>
+                            </>
+                        )}
+                        {/* 完了後のナビゲーションボタン */}
                         {!data.isRunning && data.stats.success > 0 && (
-                            <button
-                                onClick={handleStartCompare}
-                                disabled={startingCompare}
-                                className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors disabled:opacity-50"
-                            >
+                            <button onClick={handleStartCompare} disabled={startingCompare}
+                                className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors disabled:opacity-50">
                                 {startingCompare ? (
                                     <><Loader2 className="w-4 h-4 animate-spin" /> 開始中...</>
                                 ) : (
@@ -207,24 +246,18 @@ const RunPage: React.FC = () => {
                             </button>
                         )}
                         {data.stats.failed > 0 && !data.isRunning && (
-                            <button
-                                onClick={handleRetry}
-                                className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-amazon-orange hover:bg-yellow-500 rounded-md transition-colors"
-                            >
+                            <button onClick={handleRetry}
+                                className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-amazon-orange hover:bg-yellow-500 rounded-md transition-colors">
                                 <RefreshCw className="w-4 h-4" /> 失敗分リトライ ({data.stats.failed})
                             </button>
                         )}
-                        <button
-                            onClick={handleDownloadStandard}
-                            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-md transition-colors"
-                        >
+                        <button onClick={handleDownloadStandard}
+                            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-md transition-colors">
                             <Download className="w-4 h-4" /> CSVエクスポート
                         </button>
                         {hasOriginalCsv && (
-                            <button
-                                onClick={handleDownloadMerged}
-                                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-md transition-colors"
-                            >
+                            <button onClick={handleDownloadMerged}
+                                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-md transition-colors">
                                 <FilePlus className="w-4 h-4" /> 元CSVに価格追加
                             </button>
                         )}
