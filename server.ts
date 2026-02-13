@@ -552,8 +552,8 @@ const processComparisonQueue = async (compareId: string): Promise<void> => {
                 }
             }
 
-            // 類似度閾値（0.2以上でマッチ判定）
-            if (bestMatch && bestScore >= 0.2) {
+            // 類似度閾値（0.7以上でマッチ判定）
+            if (bestMatch && bestScore >= 0.7) {
                 item.status = 'MATCHED';
                 item.rakutenTitle = bestMatch.itemName;
                 item.rakutenPrice = bestMatch.itemPrice;

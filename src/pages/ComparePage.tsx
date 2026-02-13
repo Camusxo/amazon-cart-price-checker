@@ -12,6 +12,8 @@ import {
     Filter,
     ChevronLeft,
     ChevronRight,
+    Eye,
+    X,
 } from 'lucide-react';
 import { ComparisonSession, ComparisonItem } from '../types';
 import { formatCurrency } from '../lib/utils';
@@ -37,6 +39,9 @@ const ComparePage: React.FC = () => {
     // ソート
     const [sortKey, setSortKey] = useState<string>('profitRate');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+    // プレビュー
+    const [previewItem, setPreviewItem] = useState<ComparisonItem | null>(null);
 
     const fetchData = async () => {
         try {
@@ -358,7 +363,7 @@ const ComparePage: React.FC = () => {
                                 </tr>
                             ) : (
                                 paginatedItems.map(item => (
-                                    <ComparisonRow key={item.asin} item={item} />
+                                    <ComparisonRow key={item.asin} item={item} onPreview={() => setPreviewItem(item)} />
                                 ))
                             )}
                         </tbody>
@@ -398,6 +403,11 @@ const ComparePage: React.FC = () => {
                         <ChevronRight className="w-4 h-4" />
                     </button>
                 </div>
+            )}
+
+            {/* プレビューモーダル */}
+            {previewItem && (
+                <PreviewModal item={previewItem} onClose={() => setPreviewItem(null)} />
             )}
         </div>
     );
@@ -448,7 +458,7 @@ function SortHeader({ label, sortKey, currentKey, dir, onClick }: {
     );
 }
 
-function ComparisonRow({ item }: { item: ComparisonItem }) {
+function ComparisonRow({ item, onPreview }: { item: ComparisonItem; onPreview: () => void }) {
     const isProfitable = item.estimatedProfit !== null && item.estimatedProfit > 0;
     const isHighProfit = item.profitRate !== null && item.profitRate >= 20;
 
@@ -456,25 +466,32 @@ function ComparisonRow({ item }: { item: ComparisonItem }) {
         <tr className={`hover:bg-slate-50 transition-colors ${isHighProfit ? 'bg-emerald-50/30' : ''}`}>
             {/* 商品名 */}
             <td className="px-4 py-3 max-w-[280px]">
-                <div className="font-mono text-xs text-slate-400">{item.asin}</div>
-                <div className="text-slate-700 line-clamp-2 text-sm" title={item.amazonTitle}>{item.amazonTitle}</div>
-                {item.rakutenTitle && item.status === 'MATCHED' && (
-                    <div className="text-xs text-rose-500 line-clamp-1 mt-0.5" title={item.rakutenTitle}>
-                        楽天: {item.rakutenTitle}
+                <div className="flex items-start gap-2">
+                    {item.rakutenImageUrl && item.status === 'MATCHED' && (
+                        <img src={item.rakutenImageUrl} alt="" className="w-12 h-12 object-contain rounded border border-slate-200 flex-shrink-0 bg-white" />
+                    )}
+                    <div className="min-w-0">
+                        <div className="font-mono text-xs text-slate-400">{item.asin}</div>
+                        <div className="text-slate-700 line-clamp-2 text-sm" title={item.amazonTitle}>{item.amazonTitle}</div>
+                        {item.rakutenTitle && item.status === 'MATCHED' && (
+                            <div className="text-xs text-rose-500 line-clamp-1 mt-0.5" title={item.rakutenTitle}>
+                                楽天: {item.rakutenTitle}
+                            </div>
+                        )}
+                        {item.status === 'PENDING' && (
+                            <span className="inline-flex items-center text-xs text-slate-400 mt-1">
+                                <span className="animate-spin h-3 w-3 border-2 border-indigo-400 rounded-full border-t-transparent mr-1" />
+                                検索中...
+                            </span>
+                        )}
+                        {item.status === 'NO_MATCH' && (
+                            <span className="text-xs text-amber-500 mt-1">マッチなし</span>
+                        )}
+                        {item.status === 'ERROR' && (
+                            <span className="text-xs text-red-500 mt-1">{item.errorMessage || 'エラー'}</span>
+                        )}
                     </div>
-                )}
-                {item.status === 'PENDING' && (
-                    <span className="inline-flex items-center text-xs text-slate-400 mt-1">
-                        <span className="animate-spin h-3 w-3 border-2 border-indigo-400 rounded-full border-t-transparent mr-1" />
-                        検索中...
-                    </span>
-                )}
-                {item.status === 'NO_MATCH' && (
-                    <span className="text-xs text-amber-500 mt-1">マッチなし</span>
-                )}
-                {item.status === 'ERROR' && (
-                    <span className="text-xs text-red-500 mt-1">{item.errorMessage || 'エラー'}</span>
-                )}
+                </div>
             </td>
 
             {/* Amazon価格 */}
@@ -535,8 +552,8 @@ function ComparisonRow({ item }: { item: ComparisonItem }) {
                     <div className="flex items-center gap-1.5">
                         <div className="w-12 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                             <div className={`h-full rounded-full ${
-                                item.similarityScore >= 0.6 ? 'bg-emerald-500' :
-                                item.similarityScore >= 0.3 ? 'bg-amber-500' : 'bg-red-400'
+                                item.similarityScore >= 0.8 ? 'bg-emerald-500' :
+                                item.similarityScore >= 0.7 ? 'bg-blue-500' : 'bg-amber-500'
                             }`} style={{ width: `${Math.round(item.similarityScore * 100)}%` }} />
                         </div>
                         <span className="text-xs text-slate-500">{Math.round(item.similarityScore * 100)}%</span>
@@ -548,20 +565,103 @@ function ComparisonRow({ item }: { item: ComparisonItem }) {
 
             {/* リンク */}
             <td className="px-4 py-3">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col gap-1.5">
+                    {item.status === 'MATCHED' && (
+                        <button onClick={onPreview} className="flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-600 transition-colors">
+                            <Eye className="w-3.5 h-3.5" /> 詳細
+                        </button>
+                    )}
                     <a href={item.amazonUrl} target="_blank" rel="noopener noreferrer"
-                        className="text-indigo-500 hover:text-indigo-700 transition-colors" title="Amazonで見る">
-                        <ExternalLink className="w-4 h-4" />
+                        className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700 transition-colors">
+                        <ExternalLink className="w-3.5 h-3.5" /> Amazon
                     </a>
                     {item.rakutenUrl && (
                         <a href={item.rakutenUrl} target="_blank" rel="noopener noreferrer"
-                            className="text-rose-500 hover:text-rose-700 transition-colors" title="楽天で見る">
-                            <ExternalLink className="w-4 h-4" />
+                            className="flex items-center gap-1 text-xs text-rose-500 hover:text-rose-700 transition-colors">
+                            <ExternalLink className="w-3.5 h-3.5" /> 楽天
                         </a>
                     )}
                 </div>
             </td>
         </tr>
+    );
+}
+
+function PreviewModal({ item, onClose }: { item: ComparisonItem; onClose: () => void }) {
+    const isProfitable = item.estimatedProfit !== null && item.estimatedProfit > 0;
+
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                {/* ヘッダー */}
+                <div className="flex items-center justify-between p-5 border-b border-slate-200">
+                    <h3 className="text-lg font-bold text-slate-800">商品プレビュー</h3>
+                    <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-lg transition-colors">
+                        <X className="w-5 h-5 text-slate-500" />
+                    </button>
+                </div>
+
+                <div className="p-5 space-y-5">
+                    {/* 画像 + 基本情報 */}
+                    <div className="flex gap-5">
+                        {item.rakutenImageUrl && (
+                            <img src={item.rakutenImageUrl} alt="" className="w-32 h-32 object-contain rounded-lg border border-slate-200 bg-white flex-shrink-0" />
+                        )}
+                        <div className="min-w-0">
+                            <div className="font-mono text-xs text-slate-400 mb-1">{item.asin}</div>
+                            <div className="text-sm font-medium text-slate-800 mb-2">{item.amazonTitle}</div>
+                            {item.rakutenTitle && (
+                                <div className="text-xs text-rose-500">楽天: {item.rakutenTitle}</div>
+                            )}
+                            {item.rakutenShop && (
+                                <div className="text-xs text-slate-500 mt-1">店舗: {item.rakutenShop}</div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* 価格比較 */}
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-indigo-50 rounded-xl p-4 text-center border border-indigo-100">
+                            <div className="text-xs font-medium text-indigo-500 mb-1">Amazon価格</div>
+                            <div className="text-2xl font-bold text-indigo-700">{formatCurrency(item.amazonPrice, 'JPY')}</div>
+                            <div className="text-xs text-indigo-400 mt-1">手数料 {formatCurrency(item.estimatedFee, 'JPY')}</div>
+                        </div>
+                        <div className="bg-rose-50 rounded-xl p-4 text-center border border-rose-100">
+                            <div className="text-xs font-medium text-rose-500 mb-1">楽天価格</div>
+                            <div className="text-2xl font-bold text-rose-700">{item.rakutenPrice !== null ? formatCurrency(item.rakutenPrice, 'JPY') : '-'}</div>
+                            <div className="text-xs text-rose-400 mt-1">類似度 {Math.round(item.similarityScore * 100)}%</div>
+                        </div>
+                    </div>
+
+                    {/* 利益情報 */}
+                    {item.estimatedProfit !== null && (
+                        <div className={`rounded-xl p-4 text-center border ${isProfitable ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
+                            <div className={`text-xs font-medium mb-1 ${isProfitable ? 'text-emerald-500' : 'text-red-500'}`}>推定利益</div>
+                            <div className={`text-3xl font-bold ${isProfitable ? 'text-emerald-700' : 'text-red-700'}`}>
+                                {formatCurrency(item.estimatedProfit, 'JPY')}
+                            </div>
+                            <div className={`text-sm font-medium mt-1 ${isProfitable ? 'text-emerald-600' : 'text-red-600'}`}>
+                                利益率 {item.profitRate !== null ? `${item.profitRate > 0 ? '+' : ''}${item.profitRate}%` : '-'}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* リンクボタン */}
+                    <div className="flex gap-3">
+                        <a href={item.amazonUrl} target="_blank" rel="noopener noreferrer"
+                            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium">
+                            <ExternalLink className="w-4 h-4" /> Amazonで見る
+                        </a>
+                        {item.rakutenUrl && (
+                            <a href={item.rakutenUrl} target="_blank" rel="noopener noreferrer"
+                                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors text-sm font-medium">
+                                <ExternalLink className="w-4 h-4" /> 楽天で見る
+                            </a>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
     );
 }
 
