@@ -1,9 +1,11 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { ShoppingCart, History, UploadCloud, GitCompareArrows } from 'lucide-react';
+import { ShoppingCart, History, Home, Shield, LogOut } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useAuth } from '../contexts/AuthContext';
 
 const Layout: React.FC = () => {
     const location = useLocation();
+    const { user, logout, isAdmin } = useAuth();
 
     const isActive = (path: string) => {
         if (path === '/') return location.pathname === '/';
@@ -33,13 +35,32 @@ const Layout: React.FC = () => {
 
                     <nav className="flex items-center gap-1">
                         <Link to="/" className={navItemClass('/')}>
-                            <UploadCloud className="w-4 h-4" />
-                            Import
+                            <Home className="w-4 h-4" />
+                            ホーム
                         </Link>
                         <Link to="/history" className={navItemClass('/history')}>
                             <History className="w-4 h-4" />
                             History
                         </Link>
+                        {isAdmin && (
+                            <Link to="/admin" className={navItemClass('/admin')}>
+                                <Shield className="w-4 h-4" />
+                                管理
+                            </Link>
+                        )}
+                        <div className="ml-2 pl-2 border-l border-slate-200 flex items-center gap-2">
+                            <span className="text-xs text-slate-500">
+                                {user?.username}
+                                <span className={`ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                    user?.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
+                                }`}>
+                                    {user?.role === 'admin' ? '管理者' : '会員'}
+                                </span>
+                            </span>
+                            <button onClick={logout} className="flex items-center gap-1 px-2 py-1.5 text-xs text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors" title="ログアウト">
+                                <LogOut className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
                     </nav>
                 </div>
             </header>

@@ -5,6 +5,8 @@ import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 
 // --- 型定義 ---
 
@@ -96,6 +98,64 @@ const KEEPA_DOMAIN = Number(process.env.KEEPA_DOMAIN || 5);
 const CACHE_TTL = Number(process.env.CACHE_TTL_SECONDS || 3600);
 const RAKUTEN_APP_ID = process.env.RAKUTEN_APP_ID;
 const RAKUTEN_ACCESS_KEY = process.env.RAKUTEN_ACCESS_KEY;
+const JWT_SECRET = process.env.JWT_SECRET || 'price-checker-secret-key-change-in-production';
+const ADMIN_ID = process.env.ADMIN_ID || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+
+// --- 認証関連 ---
+type UserRole = 'admin' | 'member';
+
+interface User {
+    id: string;
+    username: string;
+    passwordHash: string;
+    role: UserRole;
+    createdAt: number;
+}
+
+// インメモリユーザーストア
+const users: Record<string, User> = {};
+
+// 管理者アカウント初期化
+const initAdmin = async () => {
+    const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+    users['admin'] = {
+        id: 'admin',
+        username: ADMIN_ID,
+        passwordHash: hash,
+        role: 'admin',
+        createdAt: Date.now(),
+    };
+    console.log(`管理者アカウント初期化: ${ADMIN_ID}`);
+};
+initAdmin();
+
+// JWT認証ミドルウェア
+const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        res.status(401).json({ error: 'ログインが必要です' });
+        return;
+    }
+    try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; role: UserRole };
+        (req as any).user = decoded;
+        next();
+    } catch {
+        res.status(401).json({ error: 'セッションが無効です。再ログインしてください' });
+    }
+};
+
+// 管理者チェックミドルウェア
+const adminOnly = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const user = (req as any).user;
+    if (!user || user.role !== 'admin') {
+        res.status(403).json({ error: '管理者権限が必要です' });
+        return;
+    }
+    next();
+};
 
 const DOMAIN_CURRENCY_MAP: Record<number, { currency: string; urlDomain: string }> = {
     1: { currency: 'USD', urlDomain: 'www.amazon.com' },
@@ -670,6 +730,163 @@ const processComparisonQueue = async (compareId: string): Promise<void> => {
 };
 
 // --- APIルート ---
+
+// --- 認証APIルート ---
+
+// ログイン
+app.post('/api/auth/login', async (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+        res.status(400).json({ error: 'ユーザー名とパスワードが必要です' });
+        return;
+    }
+
+    const user = Object.values(users).find(u => u.username === username);
+    if (!user) {
+        res.status(401).json({ error: 'ユーザー名またはパスワードが正しくありません' });
+        return;
+    }
+
+    const isValid = await bcrypt.compare(password, user.passwordHash);
+    if (!isValid) {
+        res.status(401).json({ error: 'ユーザー名またはパスワードが正しくありません' });
+        return;
+    }
+
+    const token = jwt.sign({ userId: user.id, role: user.role, username: user.username }, JWT_SECRET, { expiresIn: '24h' });
+    res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+});
+
+// 現在のユーザー情報
+app.get('/api/auth/me', authMiddleware, (req, res) => {
+    const { userId, role, username } = (req as any).user;
+    res.json({ id: userId, username, role });
+});
+
+// 管理者: ユーザー一覧
+app.get('/api/admin/users', authMiddleware, adminOnly, (_req, res) => {
+    const userList = Object.values(users).map(u => ({
+        id: u.id,
+        username: u.username,
+        role: u.role,
+        createdAt: u.createdAt,
+    }));
+    res.json(userList);
+});
+
+// 管理者: ユーザー登録
+app.post('/api/admin/users', authMiddleware, adminOnly, async (req, res) => {
+    const { username, password, role } = req.body;
+    if (!username || !password) {
+        res.status(400).json({ error: 'ユーザー名とパスワードが必要です' });
+        return;
+    }
+    if (Object.values(users).some(u => u.username === username)) {
+        res.status(400).json({ error: 'このユーザー名は既に使用されています' });
+        return;
+    }
+    const validRole: UserRole = role === 'admin' ? 'admin' : 'member';
+    const hash = await bcrypt.hash(password, 10);
+    const id = `user_${Date.now()}`;
+    users[id] = { id, username, passwordHash: hash, role: validRole, createdAt: Date.now() };
+    res.json({ id, username, role: validRole });
+});
+
+// 管理者: ユーザー削除
+app.delete('/api/admin/users/:userId', authMiddleware, adminOnly, (req, res) => {
+    const { userId } = req.params;
+    if (userId === 'admin') {
+        res.status(400).json({ error: '管理者アカウントは削除できません' });
+        return;
+    }
+    if (!users[userId]) {
+        res.status(404).json({ error: 'ユーザーが見つかりません' });
+        return;
+    }
+    delete users[userId];
+    res.json({ ok: true });
+});
+
+// 管理者: パスワード変更
+app.patch('/api/admin/users/:userId/password', authMiddleware, adminOnly, async (req, res) => {
+    const { userId } = req.params;
+    const { password } = req.body;
+    if (!password || password.length < 4) {
+        res.status(400).json({ error: 'パスワードは4文字以上必要です' });
+        return;
+    }
+    const user = users[userId];
+    if (!user) { res.status(404).json({ error: 'ユーザーが見つかりません' }); return; }
+    user.passwordHash = await bcrypt.hash(password, 10);
+    res.json({ ok: true });
+});
+
+// --- 以降のAPIルートに認証を適用 ---
+app.use('/api/runs', authMiddleware);
+app.use('/api/compare', authMiddleware);
+app.use('/api/history', authMiddleware);
+app.use('/api/status', authMiddleware);
+
+// --- Keepa検索API ---
+app.get('/api/keepa-search', authMiddleware, async (req, res) => {
+    const keyword = req.query.keyword as string;
+    if (!keyword || keyword.trim().length === 0) {
+        res.status(400).json({ error: '検索キーワードが必要です' });
+        return;
+    }
+    if (!KEEPA_API_KEY) {
+        res.status(500).json({ error: 'KEEPA_API_KEYが設定されていません' });
+        return;
+    }
+
+    try {
+        const response = await axios.get<KeepaApiResponse>('https://api.keepa.com/search', {
+            params: {
+                key: KEEPA_API_KEY,
+                domain: KEEPA_DOMAIN,
+                type: 'product',
+                term: keyword.trim(),
+                stats: 30,
+                page: 0,
+            },
+            timeout: 30000,
+        });
+
+        const data = response.data;
+        if (data.error) {
+            res.status(400).json({ error: data.error.message });
+            return;
+        }
+
+        const domainInfo = DOMAIN_CURRENCY_MAP[KEEPA_DOMAIN] || DOMAIN_CURRENCY_MAP[5];
+        const products = (data.products || []).slice(0, 30).map(p => ({
+            asin: p.asin,
+            title: p.title || null,
+            price: extractCurrentPrice(p.csv, KEEPA_DOMAIN),
+            currency: domainInfo.currency,
+            imageUrl: p.asin ? `https://images-na.ssl-images-amazon.com/images/I/${p.asin}.jpg` : null,
+            janCode: extractJanCode(p) || null,
+            monthlySold: p.salesRankDrops30 || null,
+        }));
+
+        res.json({
+            products,
+            tokensLeft: data.tokensLeft,
+            tokensConsumed: data.tokensConsumed,
+        });
+    } catch (error: unknown) {
+        const err = error as { response?: { status: number; data?: any }; message?: string };
+        if (err.response?.status === 429) {
+            res.status(429).json({ error: 'Keepa APIレート制限。しばらく待ってから再試行してください' });
+            return;
+        }
+        if (err.response?.status === 401 || err.response?.status === 402) {
+            res.status(401).json({ error: 'Keepa API認証エラー。APIキーを確認してください' });
+            return;
+        }
+        res.status(500).json({ error: `Keepa検索エラー: ${err.message}` });
+    }
+});
 
 app.post('/api/runs', (req, res) => {
     const { asins, originalCsvData } = req.body;

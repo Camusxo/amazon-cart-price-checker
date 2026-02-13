@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
-import { Upload, FileText, AlertCircle, Play, Loader2, Info } from 'lucide-react';
+import { Upload, FileText, AlertCircle, Play, Loader2, Info, Search as SearchIcon, CheckSquare, Square as SquareIcon } from 'lucide-react';
 import axios from 'axios';
 import { OriginalCsvData, OriginalRowData } from '../types';
 
@@ -64,6 +64,101 @@ const ImportPage: React.FC = () => {
     const [detectedPriceColumn, setDetectedPriceColumn] = useState<string | null>(null);
 
     const [originalCsvData, setOriginalCsvData] = useState<OriginalCsvData | null>(null);
+
+    // タブ state
+    const [activeTab, setActiveTab] = useState<'csv' | 'text' | 'keepa'>('csv');
+
+    // テキスト入力用
+    const [textInput, setTextInput] = useState('');
+    const [textPreview, setTextPreview] = useState<PreviewRow[]>([]);
+    const [textStats, setTextStats] = useState({ total: 0, unique: 0, duplicates: 0, empty: 0 });
+    const [textAsins, setTextAsins] = useState<string[]>([]);
+
+    // Keepa検索用
+    const [keepaKeyword, setKeepaKeyword] = useState('');
+    const [keepaSearching, setKeepaSearching] = useState(false);
+    const [keepaResults, setKeepaResults] = useState<Array<{ asin: string; title: string | null; price: number | null; currency: string; selected: boolean }>>([]);
+    const [keepaError, setKeepaError] = useState('');
+
+    const processTextInput = (text: string) => {
+        setTextInput(text);
+        // 改行、カンマ、スペース、タブで分割
+        const raw = text.split(/[\n,\s\t]+/).map(s => s.trim()).filter(Boolean);
+        const valid: string[] = [];
+        const seen = new Set<string>();
+        let empty = 0;
+
+        raw.forEach(val => {
+            if (isValidAsin(val)) {
+                valid.push(val);
+                seen.add(val);
+            } else {
+                empty++;
+            }
+        });
+
+        const unique = Array.from(seen);
+        setTextAsins(unique);
+        setTextStats({ total: raw.length, unique: unique.length, duplicates: valid.length - unique.length, empty });
+        setTextPreview(unique.slice(0, 5).map((asin, i) => ({ rowNum: i + 1, asin })));
+    };
+
+    const handleKeepaSearch = async () => {
+        if (!keepaKeyword.trim()) return;
+        setKeepaSearching(true);
+        setKeepaError('');
+        setKeepaResults([]);
+        try {
+            const res = await axios.get('/api/keepa-search', { params: { keyword: keepaKeyword.trim() } });
+            setKeepaResults(res.data.products.map((p: any) => ({
+                asin: p.asin,
+                title: p.title,
+                price: p.price,
+                currency: p.currency,
+                selected: true,
+            })));
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { error?: string } } };
+            setKeepaError(error.response?.data?.error || 'Keepa検索に失敗しました');
+        }
+        setKeepaSearching(false);
+    };
+
+    const toggleKeepaSelect = (asin: string) => {
+        setKeepaResults(prev => prev.map(r => r.asin === asin ? { ...r, selected: !r.selected } : r));
+    };
+
+    const toggleKeepaSelectAll = () => {
+        const allSelected = keepaResults.every(r => r.selected);
+        setKeepaResults(prev => prev.map(r => ({ ...r, selected: !allSelected })));
+    };
+
+    const handleStartFromText = async () => {
+        if (textAsins.length === 0) return;
+        setIsLoading(true);
+        try {
+            const res = await axios.post('/api/runs', { asins: textAsins });
+            navigate(`/results/${res.data.runId}`);
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { error?: string } } };
+            setError(error.response?.data?.error || '処理開始に失敗しました');
+            setIsLoading(false);
+        }
+    };
+
+    const handleStartFromKeepa = async () => {
+        const selected = keepaResults.filter(r => r.selected);
+        if (selected.length === 0) return;
+        setIsLoading(true);
+        try {
+            const res = await axios.post('/api/runs', { asins: selected.map(r => r.asin) });
+            navigate(`/results/${res.data.runId}`);
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { error?: string } } };
+            setError(error.response?.data?.error || '処理開始に失敗しました');
+            setIsLoading(false);
+        }
+    };
 
     const processFile = (uploadedFile: File) => {
         setFile(uploadedFile);
@@ -327,54 +422,26 @@ const ImportPage: React.FC = () => {
     return (
         <div className="max-w-2xl mx-auto space-y-8">
             <div className="text-center space-y-2">
-                <h2 className="text-3xl font-bold text-slate-800">ASINインポート</h2>
-                <p className="text-slate-500">
-                    ASIN列を含むCSVファイルをアップロードして、Amazon価格をチェックします。
-                </p>
+                <h2 className="text-3xl font-bold text-slate-800">ASIN登録</h2>
+                <p className="text-slate-500">Amazon商品のASINを登録して価格チェック・楽天比較を行います。</p>
             </div>
 
-            <div className="bg-blue-50 border border-blue-200 text-blue-700 p-4 rounded-lg flex items-start gap-3">
-                <Info className="w-5 h-5 mt-0.5 flex-shrink-0" />
-                <div className="text-sm">
-                    <p className="font-medium mb-1">対応するASIN列名:</p>
-                    <p className="text-blue-600">
-                        asin, ASIN, 備考（ASIN）, 備考, remarks など
-                    </p>
-                    <p className="mt-2">
-                        価格は「想定販売価格」列に反映されるか、新しい列として追加されます。
-                    </p>
-                </div>
-            </div>
-
-            <div
-                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={handleDrop}
-                className={`
-                    relative border-2 border-dashed rounded-xl p-12 text-center transition-all cursor-pointer
-                    ${isDragging ? 'border-amazon-blue bg-blue-50 scale-[1.02]' : 'border-slate-300 hover:border-slate-400 bg-white'}
-                `}
-            >
-                <input
-                    type="file"
-                    accept=".csv"
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    onChange={(e) => e.target.files?.[0] && processFile(e.target.files[0])}
-                />
-
-                <div className="flex flex-col items-center gap-4">
-                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center">
-                        <Upload className="w-8 h-8 text-slate-400" />
-                    </div>
-                    <div>
-                        <p className="text-lg font-medium text-slate-700">
-                            {file ? file.name : "ここにCSVをドラッグ&ドロップ"}
-                        </p>
-                        <p className="text-sm text-slate-400 mt-1">
-                            {file ? `${(file.size / 1024).toFixed(1)} KB` : "またはクリックしてファイルを選択"}
-                        </p>
-                    </div>
-                </div>
+            {/* タブ切替 */}
+            <div className="flex border-b border-slate-200">
+                {[
+                    { key: 'csv' as const, label: 'CSV アップロード', icon: '\u{1F4C4}' },
+                    { key: 'text' as const, label: 'テキスト入力', icon: '\u{270F}\u{FE0F}' },
+                    { key: 'keepa' as const, label: 'Keepa検索', icon: '\u{1F50D}' },
+                ].map(tab => (
+                    <button key={tab.key} onClick={() => { setActiveTab(tab.key); setError(null); }}
+                        className={`flex items-center gap-1.5 px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+                            activeTab === tab.key
+                                ? 'border-indigo-500 text-indigo-600'
+                                : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                        }`}>
+                        <span>{tab.icon}</span> {tab.label}
+                    </button>
+                ))}
             </div>
 
             {error && (
@@ -384,83 +451,289 @@ const ImportPage: React.FC = () => {
                 </div>
             )}
 
-            {file && !error && originalCsvData && (
-                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                    {detectedAsinColumn && (
-                        <div className="px-6 py-3 bg-green-50 border-b border-green-100 text-sm text-green-700">
-                            <span className="font-medium">検出されたASIN列:</span> 「{detectedAsinColumn}」
-                            {detectedPriceColumn && (
-                                <span className="ml-4">
-                                    <span className="font-medium">価格列:</span> 「{detectedPriceColumn}」
-                                </span>
+            {/* === CSVタブ === */}
+            {activeTab === 'csv' && (
+                <>
+                    <div className="bg-blue-50 border border-blue-200 text-blue-700 p-4 rounded-lg flex items-start gap-3">
+                        <Info className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                        <div className="text-sm">
+                            <p className="font-medium mb-1">対応するASIN列名:</p>
+                            <p className="text-blue-600">
+                                asin, ASIN, 備考（ASIN）, 備考, remarks など
+                            </p>
+                            <p className="mt-2">
+                                価格は「想定販売価格」列に反映されるか、新しい列として追加されます。
+                            </p>
+                        </div>
+                    </div>
+
+                    <div
+                        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                        onDragLeave={() => setIsDragging(false)}
+                        onDrop={handleDrop}
+                        className={`
+                            relative border-2 border-dashed rounded-xl p-12 text-center transition-all cursor-pointer
+                            ${isDragging ? 'border-amazon-blue bg-blue-50 scale-[1.02]' : 'border-slate-300 hover:border-slate-400 bg-white'}
+                        `}
+                    >
+                        <input
+                            type="file"
+                            accept=".csv"
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            onChange={(e) => e.target.files?.[0] && processFile(e.target.files[0])}
+                        />
+
+                        <div className="flex flex-col items-center gap-4">
+                            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center">
+                                <Upload className="w-8 h-8 text-slate-400" />
+                            </div>
+                            <div>
+                                <p className="text-lg font-medium text-slate-700">
+                                    {file ? file.name : "ここにCSVをドラッグ&ドロップ"}
+                                </p>
+                                <p className="text-sm text-slate-400 mt-1">
+                                    {file ? `${(file.size / 1024).toFixed(1)} KB` : "またはクリックしてファイルを選択"}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {file && !error && originalCsvData && (
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            {detectedAsinColumn && (
+                                <div className="px-6 py-3 bg-green-50 border-b border-green-100 text-sm text-green-700">
+                                    <span className="font-medium">検出されたASIN列:</span> 「{detectedAsinColumn}」
+                                    {detectedPriceColumn && (
+                                        <span className="ml-4">
+                                            <span className="font-medium">価格列:</span> 「{detectedPriceColumn}」
+                                        </span>
+                                    )}
+                                </div>
                             )}
+
+                            <div className="p-6 border-b border-slate-100 grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="text-center">
+                                    <div className="text-sm text-slate-500">総行数</div>
+                                    <div className="text-2xl font-bold text-slate-800">{stats.total}</div>
+                                </div>
+                                <div className="text-center">
+                                    <div className="text-sm text-slate-500">有効ASIN数</div>
+                                    <div className="text-2xl font-bold text-amazon-blue">{stats.unique}</div>
+                                </div>
+                                <div className="text-center">
+                                    <div className="text-sm text-slate-500">重複</div>
+                                    <div className="text-xl font-semibold text-orange-500">{stats.duplicates}</div>
+                                </div>
+                                <div className="text-center">
+                                    <div className="text-sm text-slate-500">無効/空</div>
+                                    <div className="text-xl font-semibold text-red-500">{stats.empty}</div>
+                                </div>
+                            </div>
+
+                            <div className="p-6 bg-slate-50">
+                                <h4 className="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
+                                    <FileText className="w-4 h-4" /> CSVプレビュー（最初の5件）
+                                </h4>
+                                <div className="bg-white border rounded-md overflow-hidden">
+                                    <table className="w-full text-sm text-left">
+                                        <thead className="bg-slate-100 text-slate-600">
+                                            <tr>
+                                                <th className="px-4 py-2 font-medium">行番号</th>
+                                                <th className="px-4 py-2 font-medium">ASIN</th>
+                                                <th className="px-4 py-2 font-medium">商品情報</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {preview.map((row) => (
+                                                <tr key={row.rowNum}>
+                                                    <td className="px-4 py-2 text-slate-400">{row.rowNum}</td>
+                                                    <td className="px-4 py-2 font-mono text-slate-700">{row.asin}</td>
+                                                    <td className="px-4 py-2 text-slate-500 truncate max-w-[200px]" title={row.extraInfo}>
+                                                        {row.extraInfo || '-'}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <div className="mt-6 flex justify-end">
+                                    <button
+                                        onClick={handleStart}
+                                        disabled={isLoading || stats.unique === 0}
+                                        className="bg-amazon-orange hover:bg-yellow-500 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isLoading ? (
+                                            <>
+                                                <Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...
+                                            </>
+                                        ) : (
+                                            <>
+                                                価格チェック開始 <Play className="w-5 h-5 fill-current" />
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     )}
+                </>
+            )}
 
-                    <div className="p-6 border-b border-slate-100 grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="text-center">
-                            <div className="text-sm text-slate-500">総行数</div>
-                            <div className="text-2xl font-bold text-slate-800">{stats.total}</div>
-                        </div>
-                        <div className="text-center">
-                            <div className="text-sm text-slate-500">有効ASIN数</div>
-                            <div className="text-2xl font-bold text-amazon-blue">{stats.unique}</div>
-                        </div>
-                        <div className="text-center">
-                            <div className="text-sm text-slate-500">重複</div>
-                            <div className="text-xl font-semibold text-orange-500">{stats.duplicates}</div>
-                        </div>
-                        <div className="text-center">
-                            <div className="text-sm text-slate-500">無効/空</div>
-                            <div className="text-xl font-semibold text-red-500">{stats.empty}</div>
+            {/* === テキストタブ === */}
+            {activeTab === 'text' && (
+                <div className="space-y-4">
+                    <div className="bg-blue-50 border border-blue-200 text-blue-700 p-4 rounded-lg flex items-start gap-3">
+                        <Info className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                        <div className="text-sm">
+                            <p className="font-medium mb-1">ASINを入力してください:</p>
+                            <p className="text-blue-600">1行に1つのASIN、またはカンマ・スペース区切りで入力できます。</p>
                         </div>
                     </div>
 
-                    <div className="p-6 bg-slate-50">
-                        <h4 className="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
-                            <FileText className="w-4 h-4" /> CSVプレビュー（最初の5件）
-                        </h4>
-                        <div className="bg-white border rounded-md overflow-hidden">
-                            <table className="w-full text-sm text-left">
-                                <thead className="bg-slate-100 text-slate-600">
-                                    <tr>
-                                        <th className="px-4 py-2 font-medium">行番号</th>
-                                        <th className="px-4 py-2 font-medium">ASIN</th>
-                                        <th className="px-4 py-2 font-medium">商品情報</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                    {preview.map((row) => (
-                                        <tr key={row.rowNum}>
-                                            <td className="px-4 py-2 text-slate-400">{row.rowNum}</td>
-                                            <td className="px-4 py-2 font-mono text-slate-700">{row.asin}</td>
-                                            <td className="px-4 py-2 text-slate-500 truncate max-w-[200px]" title={row.extraInfo}>
-                                                {row.extraInfo || '-'}
-                                            </td>
+                    <textarea
+                        value={textInput}
+                        onChange={e => processTextInput(e.target.value)}
+                        placeholder={"B09LHDNJ2J\nB0936CSHGD\nB0C4KJ28GB\n...\n\nまたは: B09LHDNJ2J, B0936CSHGD, B0C4KJ28GB"}
+                        rows={10}
+                        className="w-full px-4 py-3 border border-slate-300 rounded-xl font-mono text-sm focus:ring-2 focus:ring-indigo-400 focus:border-transparent outline-none resize-y"
+                    />
+
+                    {textAsins.length > 0 && (
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="p-6 border-b border-slate-100 grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="text-center">
+                                    <div className="text-sm text-slate-500">入力数</div>
+                                    <div className="text-2xl font-bold text-slate-800">{textStats.total}</div>
+                                </div>
+                                <div className="text-center">
+                                    <div className="text-sm text-slate-500">有効ASIN</div>
+                                    <div className="text-2xl font-bold text-indigo-600">{textStats.unique}</div>
+                                </div>
+                                <div className="text-center">
+                                    <div className="text-sm text-slate-500">重複</div>
+                                    <div className="text-xl font-semibold text-orange-500">{textStats.duplicates}</div>
+                                </div>
+                                <div className="text-center">
+                                    <div className="text-sm text-slate-500">無効</div>
+                                    <div className="text-xl font-semibold text-red-500">{textStats.empty}</div>
+                                </div>
+                            </div>
+
+                            <div className="p-6 bg-slate-50">
+                                <h4 className="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
+                                    <FileText className="w-4 h-4" /> プレビュー（最初の5件）
+                                </h4>
+                                <div className="bg-white border rounded-md overflow-hidden">
+                                    <table className="w-full text-sm text-left">
+                                        <thead className="bg-slate-100 text-slate-600">
+                                            <tr>
+                                                <th className="px-4 py-2 font-medium">#</th>
+                                                <th className="px-4 py-2 font-medium">ASIN</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {textPreview.map(row => (
+                                                <tr key={row.rowNum}>
+                                                    <td className="px-4 py-2 text-slate-400">{row.rowNum}</td>
+                                                    <td className="px-4 py-2 font-mono text-slate-700">{row.asin}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <div className="mt-6 flex justify-end">
+                                    <button onClick={handleStartFromText} disabled={isLoading || textAsins.length === 0}
+                                        className="bg-amazon-orange hover:bg-yellow-500 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                        {isLoading ? <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</> : <>価格チェック開始 <Play className="w-5 h-5 fill-current" /></>}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* === Keepa検索タブ === */}
+            {activeTab === 'keepa' && (
+                <div className="space-y-4">
+                    <div className="bg-blue-50 border border-blue-200 text-blue-700 p-4 rounded-lg flex items-start gap-3">
+                        <Info className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                        <div className="text-sm">
+                            <p className="font-medium mb-1">Keepa商品検索:</p>
+                            <p className="text-blue-600">キーワードでAmazon商品を検索し、選択した商品のASINで価格チェックを開始します。</p>
+                        </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                        <div className="relative flex-1">
+                            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                            <input type="text" value={keepaKeyword} onChange={e => setKeepaKeyword(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && handleKeepaSearch()}
+                                placeholder="商品名やキーワードを入力..."
+                                className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:border-transparent outline-none text-sm" />
+                        </div>
+                        <button onClick={handleKeepaSearch} disabled={keepaSearching || !keepaKeyword.trim()}
+                            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50 flex items-center gap-2">
+                            {keepaSearching ? <><Loader2 className="w-4 h-4 animate-spin" /> 検索中...</> : '検索'}
+                        </button>
+                    </div>
+
+                    {keepaError && (
+                        <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">{keepaError}</div>
+                    )}
+
+                    {keepaResults.length > 0 && (
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                                <span className="text-sm font-medium text-slate-700">
+                                    検索結果: {keepaResults.length}件 (選択: {keepaResults.filter(r => r.selected).length}件)
+                                </span>
+                                <button onClick={toggleKeepaSelectAll} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                                    {keepaResults.every(r => r.selected) ? '全解除' : '全選択'}
+                                </button>
+                            </div>
+                            <div className="max-h-[400px] overflow-y-auto">
+                                <table className="w-full text-sm text-left">
+                                    <thead className="bg-slate-100 text-slate-600 sticky top-0">
+                                        <tr>
+                                            <th className="px-4 py-2 w-10"></th>
+                                            <th className="px-4 py-2 font-medium">ASIN</th>
+                                            <th className="px-4 py-2 font-medium">商品名</th>
+                                            <th className="px-4 py-2 font-medium">価格</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {keepaResults.map(r => (
+                                            <tr key={r.asin} className={`hover:bg-slate-50 cursor-pointer ${r.selected ? 'bg-indigo-50/50' : ''}`}
+                                                onClick={() => toggleKeepaSelect(r.asin)}>
+                                                <td className="px-4 py-2">
+                                                    {r.selected ? (
+                                                        <CheckSquare className="w-4 h-4 text-indigo-600" />
+                                                    ) : (
+                                                        <SquareIcon className="w-4 h-4 text-slate-300" />
+                                                    )}
+                                                </td>
+                                                <td className="px-4 py-2 font-mono text-xs text-slate-700">{r.asin}</td>
+                                                <td className="px-4 py-2 text-slate-600 text-xs line-clamp-1 max-w-[300px]">{r.title || '-'}</td>
+                                                <td className="px-4 py-2 font-medium text-slate-800 whitespace-nowrap">
+                                                    {r.price !== null ? new Intl.NumberFormat('ja-JP', { style: 'currency', currency: r.currency }).format(r.price) : '-'}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
 
-                        <div className="mt-6 flex justify-end">
-                            <button
-                                onClick={handleStart}
-                                disabled={isLoading || stats.unique === 0}
-                                className="bg-amazon-orange hover:bg-yellow-500 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {isLoading ? (
-                                    <>
-                                        <Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...
-                                    </>
-                                ) : (
-                                    <>
-                                        価格チェック開始 <Play className="w-5 h-5 fill-current" />
-                                    </>
-                                )}
-                            </button>
+                            <div className="p-4 border-t border-slate-200 flex justify-end">
+                                <button onClick={handleStartFromKeepa} disabled={isLoading || keepaResults.filter(r => r.selected).length === 0}
+                                    className="bg-amazon-orange hover:bg-yellow-500 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    {isLoading ? <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</> : <>選択した{keepaResults.filter(r => r.selected).length}件で価格チェック開始 <Play className="w-5 h-5 fill-current" /></>}
+                                </button>
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
             )}
         </div>

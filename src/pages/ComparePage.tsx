@@ -5,7 +5,6 @@ import Papa from 'papaparse';
 import {
     Download,
     RefreshCw,
-    Search,
     ExternalLink,
     Filter,
     ChevronLeft,
@@ -14,9 +13,20 @@ import {
     Star,
     Square,
     Play,
+    CheckCircle,
 } from 'lucide-react';
 import { ComparisonSession, ComparisonItem } from '../types';
 import { formatCurrency } from '../lib/utils';
+
+interface SavedFilter {
+    keyword: string; excludeKeyword: string; minProfit: string; minProfitMax: string;
+    minProfitRate: string; minProfitRateMax: string; minPrice: string; maxPrice: string;
+    minRakutenPrice: string; maxRakutenPrice: string; minMonthlySold: string; maxMonthlySold: string;
+    minPoints: string; maxPoints: string; favoriteFilter: 'all' | 'yes' | 'no';
+    confirmedFilter: 'all' | 'yes' | 'no'; statusFilter: string;
+    minProfitWithPoints: string; maxProfitWithPoints: string;
+    minProfitRateWithPoints: string; maxProfitRateWithPoints: string;
+}
 
 const ComparePage: React.FC = () => {
     const { compareId } = useParams();
@@ -32,6 +42,31 @@ const ComparePage: React.FC = () => {
     const [statusFilter, setStatusFilter] = useState<string>('ALL');
     const [showFilterPanel, setShowFilterPanel] = useState(false);
     const [showFavoriteOnly, setShowFavoriteOnly] = useState(false);
+
+    // 詳細フィルター
+    const [excludeKeyword, setExcludeKeyword] = useState('');
+    const [favoriteFilter, setFavoriteFilter] = useState<'all' | 'yes' | 'no'>('all');
+    const [confirmedFilter, setConfirmedFilter] = useState<'all' | 'yes' | 'no'>('all');
+    const [minProfitMax, setMinProfitMax] = useState('');
+    const [minMonthlySold, setMinMonthlySold] = useState('');
+    const [maxMonthlySold, setMaxMonthlySold] = useState('');
+    const [minRakutenPrice, setMinRakutenPrice] = useState('');
+    const [maxRakutenPrice, setMaxRakutenPrice] = useState('');
+    const [minPoints, setMinPoints] = useState('');
+    const [maxPoints, setMaxPoints] = useState('');
+    const [minProfitRateMax, setMinProfitRateMax] = useState('');
+    const [minProfitWithPoints, setMinProfitWithPoints] = useState('');
+    const [maxProfitWithPoints, setMaxProfitWithPoints] = useState('');
+    const [minProfitRateWithPoints, setMinProfitRateWithPoints] = useState('');
+    const [maxProfitRateWithPoints, setMaxProfitRateWithPoints] = useState('');
+
+    // 確認済みフラグ用（ComparisonItemにないのでローカル管理）
+    const [confirmedAsins, setConfirmedAsins] = useState<Set<string>>(new Set());
+
+    // カスタムフィルター保存
+    const [savedFilters, setSavedFilters] = useState<Record<string, SavedFilter>>(() => {
+        try { return JSON.parse(localStorage.getItem('pricecheck_filters') || '{}'); } catch { return {}; }
+    });
 
     // ページネーション
     const [pageSize, setPageSize] = useState(50);
@@ -96,6 +131,68 @@ const ComparePage: React.FC = () => {
         } catch { /* silent */ }
     };
 
+    const toggleConfirmed = (asin: string) => {
+        setConfirmedAsins(prev => {
+            const next = new Set(prev);
+            if (next.has(asin)) next.delete(asin);
+            else next.add(asin);
+            return next;
+        });
+    };
+
+    const saveFilter = (slot: string) => {
+        const filter: SavedFilter = {
+            keyword, excludeKeyword, minProfit, minProfitMax,
+            minProfitRate, minProfitRateMax,
+            minPrice, maxPrice, minRakutenPrice, maxRakutenPrice,
+            minMonthlySold, maxMonthlySold, minPoints, maxPoints,
+            favoriteFilter, confirmedFilter, statusFilter,
+            minProfitWithPoints, maxProfitWithPoints,
+            minProfitRateWithPoints, maxProfitRateWithPoints,
+        };
+        const updated = { ...savedFilters, [slot]: filter };
+        setSavedFilters(updated);
+        localStorage.setItem('pricecheck_filters', JSON.stringify(updated));
+    };
+
+    const loadFilter = (slot: string) => {
+        const f = savedFilters[slot];
+        if (!f) return;
+        setKeyword(f.keyword || '');
+        setExcludeKeyword(f.excludeKeyword || '');
+        setMinProfit(f.minProfit || '');
+        setMinProfitMax(f.minProfitMax || '');
+        setMinProfitRate(f.minProfitRate || '');
+        setMinProfitRateMax(f.minProfitRateMax || '');
+        setMinPrice(f.minPrice || '');
+        setMaxPrice(f.maxPrice || '');
+        setMinRakutenPrice(f.minRakutenPrice || '');
+        setMaxRakutenPrice(f.maxRakutenPrice || '');
+        setMinMonthlySold(f.minMonthlySold || '');
+        setMaxMonthlySold(f.maxMonthlySold || '');
+        setMinPoints(f.minPoints || '');
+        setMaxPoints(f.maxPoints || '');
+        setFavoriteFilter(f.favoriteFilter || 'all');
+        setConfirmedFilter(f.confirmedFilter || 'all');
+        setStatusFilter(f.statusFilter || 'ALL');
+        setMinProfitWithPoints(f.minProfitWithPoints || '');
+        setMaxProfitWithPoints(f.maxProfitWithPoints || '');
+        setMinProfitRateWithPoints(f.minProfitRateWithPoints || '');
+        setMaxProfitRateWithPoints(f.maxProfitRateWithPoints || '');
+        setCurrentPage(1);
+    };
+
+    const clearAllFilters = () => {
+        setKeyword(''); setExcludeKeyword(''); setMinProfit(''); setMinProfitMax('');
+        setMinProfitRate(''); setMinProfitRateMax(''); setMinPrice(''); setMaxPrice('');
+        setMinRakutenPrice(''); setMaxRakutenPrice(''); setMinMonthlySold(''); setMaxMonthlySold('');
+        setMinPoints(''); setMaxPoints(''); setFavoriteFilter('all'); setConfirmedFilter('all');
+        setStatusFilter('ALL'); setShowFavoriteOnly(false);
+        setMinProfitWithPoints(''); setMaxProfitWithPoints('');
+        setMinProfitRateWithPoints(''); setMaxProfitRateWithPoints('');
+        setCurrentPage(1);
+    };
+
     // ショートカットプリセット
     const applyPreset = (preset: string) => {
         setKeyword('');
@@ -133,23 +230,77 @@ const ComparePage: React.FC = () => {
     const filteredItems = useMemo(() => {
         if (!data) return [];
         return data.items.filter(item => {
+            // お気に入りフィルター
             if (showFavoriteOnly && !item.favorite) return false;
+            if (favoriteFilter === 'yes' && !item.favorite) return false;
+            if (favoriteFilter === 'no' && item.favorite) return false;
+
+            // 確認済みフラグ
+            if (confirmedFilter === 'yes' && !confirmedAsins.has(item.asin)) return false;
+            if (confirmedFilter === 'no' && confirmedAsins.has(item.asin)) return false;
+
+            // キーワード検索
             if (keyword) {
                 const kw = keyword.toLowerCase();
                 const matchTitle = item.amazonTitle.toLowerCase().includes(kw) ||
                     (item.rakutenTitle && item.rakutenTitle.toLowerCase().includes(kw));
                 const matchAsin = item.asin.toLowerCase().includes(kw);
                 const matchShop = item.rakutenShop && item.rakutenShop.toLowerCase().includes(kw);
-                if (!matchTitle && !matchAsin && !matchShop) return false;
+                const matchJan = item.janCode && item.janCode.includes(kw);
+                if (!matchTitle && !matchAsin && !matchShop && !matchJan) return false;
             }
+
+            // 除外ワード
+            if (excludeKeyword) {
+                const ew = excludeKeyword.toLowerCase();
+                if (item.amazonTitle.toLowerCase().includes(ew)) return false;
+                if (item.rakutenTitle && item.rakutenTitle.toLowerCase().includes(ew)) return false;
+            }
+
+            // ステータス
             if (statusFilter !== 'ALL' && item.status !== statusFilter) return false;
+
+            // 利益（現金）範囲
             if (minProfit && (item.estimatedProfit === null || item.estimatedProfit < Number(minProfit))) return false;
+            if (minProfitMax && (item.estimatedProfit === null || item.estimatedProfit > Number(minProfitMax))) return false;
+
+            // 利益率 範囲
             if (minProfitRate && (item.profitRate === null || item.profitRate < Number(minProfitRate))) return false;
+            if (minProfitRateMax && (item.profitRate === null || item.profitRate > Number(minProfitRateMax))) return false;
+
+            // Amazon販売価格 範囲
             if (minPrice && item.amazonPrice < Number(minPrice)) return false;
             if (maxPrice && item.amazonPrice > Number(maxPrice)) return false;
+
+            // 楽天購入価格 範囲
+            if (minRakutenPrice && (item.rakutenPrice === null || item.rakutenPrice < Number(minRakutenPrice))) return false;
+            if (maxRakutenPrice && (item.rakutenPrice === null || item.rakutenPrice > Number(maxRakutenPrice))) return false;
+
+            // 月間販売個数 範囲
+            if (minMonthlySold && (item.monthlySold === null || item.monthlySold < Number(minMonthlySold))) return false;
+            if (maxMonthlySold && (item.monthlySold === null || item.monthlySold > Number(maxMonthlySold))) return false;
+
+            // ポイント合計 範囲
+            const points = item.rakutenPrice ? Math.round(item.rakutenPrice * (item.rakutenPointRate / 100)) : 0;
+            if (minPoints && points < Number(minPoints)) return false;
+            if (maxPoints && points > Number(maxPoints)) return false;
+
+            // 利益（ポイント込み）範囲
+            const profitWP = item.estimatedProfit !== null ? item.estimatedProfit + points : null;
+            if (minProfitWithPoints && (profitWP === null || profitWP < Number(minProfitWithPoints))) return false;
+            if (maxProfitWithPoints && (profitWP === null || profitWP > Number(maxProfitWithPoints))) return false;
+
+            // 利益率（ポイント込み）範囲
+            const profitRateWP = profitWP !== null && item.amazonPrice > 0 ? Math.round((profitWP / item.amazonPrice) * 1000) / 10 : null;
+            if (minProfitRateWithPoints && (profitRateWP === null || profitRateWP < Number(minProfitRateWithPoints))) return false;
+            if (maxProfitRateWithPoints && (profitRateWP === null || profitRateWP > Number(maxProfitRateWithPoints))) return false;
+
             return true;
         });
-    }, [data, keyword, statusFilter, minProfit, minProfitRate, minPrice, maxPrice, showFavoriteOnly]);
+    }, [data, keyword, excludeKeyword, statusFilter, minProfit, minProfitMax, minProfitRate, minProfitRateMax,
+        minPrice, maxPrice, minRakutenPrice, maxRakutenPrice, minMonthlySold, maxMonthlySold,
+        minPoints, maxPoints, favoriteFilter, confirmedFilter, confirmedAsins, showFavoriteOnly,
+        minProfitWithPoints, maxProfitWithPoints, minProfitRateWithPoints, maxProfitRateWithPoints]);
 
     // ソート
     const sortedItems = useMemo(() => {
@@ -315,40 +466,144 @@ const ComparePage: React.FC = () => {
                 </button>
                 {showFilterPanel && (
                     <div className="px-4 pb-4 border-t border-slate-100 pt-3">
-                        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                            <div>
-                                <label className="block text-[10px] font-medium text-slate-500 mb-0.5">フリーワード</label>
-                                <div className="relative">
-                                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            {/* 左カラム */}
+                            <div className="space-y-2">
+                                <FilterRow label="検索:">
                                     <input type="text" value={keyword} onChange={e => { setKeyword(e.target.value); setCurrentPage(1); }}
-                                        placeholder="商品名・ASIN" className="w-full pl-6 pr-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                        placeholder="フリーワード" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                </FilterRow>
+                                <FilterRow label="お気に入り:">
+                                    <div className="flex gap-3 text-xs">
+                                        {(['all', 'yes', 'no'] as const).map(v => (
+                                            <label key={v} className="flex items-center gap-1 cursor-pointer">
+                                                <input type="radio" name="fav" checked={favoriteFilter === v} onChange={() => { setFavoriteFilter(v); setCurrentPage(1); }} className="w-3 h-3" />
+                                                {v === 'all' ? 'すべて' : v === 'yes' ? '登録済' : '未登録'}
+                                            </label>
+                                        ))}
+                                    </div>
+                                </FilterRow>
+                                <FilterRow label="確認済み:">
+                                    <div className="flex gap-3 text-xs">
+                                        {(['all', 'yes', 'no'] as const).map(v => (
+                                            <label key={v} className="flex items-center gap-1 cursor-pointer">
+                                                <input type="radio" name="conf" checked={confirmedFilter === v} onChange={() => { setConfirmedFilter(v); setCurrentPage(1); }} className="w-3 h-3" />
+                                                {v === 'all' ? 'すべて' : v === 'yes' ? '確認済' : '未確認'}
+                                            </label>
+                                        ))}
+                                    </div>
+                                </FilterRow>
+                                <FilterRow label="除外ワード:">
+                                    <input type="text" value={excludeKeyword} onChange={e => { setExcludeKeyword(e.target.value); setCurrentPage(1); }}
+                                        className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                </FilterRow>
+                                <FilterRow label="利益:">
+                                    <div className="flex gap-1 items-center">
+                                        <input type="number" value={minProfit} onChange={e => { setMinProfit(e.target.value); setCurrentPage(1); }}
+                                            placeholder="下限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                        <span className="text-slate-400 text-[10px]">~</span>
+                                        <input type="number" value={minProfitMax} onChange={e => { setMinProfitMax(e.target.value); setCurrentPage(1); }}
+                                            placeholder="上限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                    </div>
+                                </FilterRow>
+                                <FilterRow label="1ヶ月販売個数:">
+                                    <div className="flex gap-1 items-center">
+                                        <input type="number" value={minMonthlySold} onChange={e => { setMinMonthlySold(e.target.value); setCurrentPage(1); }}
+                                            placeholder="下限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                        <span className="text-slate-400 text-[10px]">~</span>
+                                        <input type="number" value={maxMonthlySold} onChange={e => { setMaxMonthlySold(e.target.value); setCurrentPage(1); }}
+                                            placeholder="上限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                    </div>
+                                </FilterRow>
+                                <FilterRow label="販売価格:">
+                                    <div className="flex gap-1 items-center">
+                                        <input type="number" value={minPrice} onChange={e => { setMinPrice(e.target.value); setCurrentPage(1); }}
+                                            placeholder="下限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                        <span className="text-slate-400 text-[10px]">~</span>
+                                        <input type="number" value={maxPrice} onChange={e => { setMaxPrice(e.target.value); setCurrentPage(1); }}
+                                            placeholder="上限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                    </div>
+                                </FilterRow>
+                            </div>
+
+                            {/* 中央カラム */}
+                            <div className="space-y-2">
+                                <FilterRow label="購入価格:">
+                                    <div className="flex gap-1 items-center">
+                                        <input type="number" value={minRakutenPrice} onChange={e => { setMinRakutenPrice(e.target.value); setCurrentPage(1); }}
+                                            placeholder="下限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                        <span className="text-slate-400 text-[10px]">~</span>
+                                        <input type="number" value={maxRakutenPrice} onChange={e => { setMaxRakutenPrice(e.target.value); setCurrentPage(1); }}
+                                            placeholder="上限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                    </div>
+                                </FilterRow>
+                                <FilterRow label="ポイント合計:">
+                                    <div className="flex gap-1 items-center">
+                                        <input type="number" value={minPoints} onChange={e => { setMinPoints(e.target.value); setCurrentPage(1); }}
+                                            placeholder="下限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                        <span className="text-slate-400 text-[10px]">~</span>
+                                        <input type="number" value={maxPoints} onChange={e => { setMaxPoints(e.target.value); setCurrentPage(1); }}
+                                            placeholder="上限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                    </div>
+                                </FilterRow>
+                                <FilterRow label="利益率:">
+                                    <div className="flex gap-1 items-center">
+                                        <input type="number" value={minProfitRate} onChange={e => { setMinProfitRate(e.target.value); setCurrentPage(1); }}
+                                            placeholder="下限%" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                        <span className="text-slate-400 text-[10px]">~</span>
+                                        <input type="number" value={minProfitRateMax} onChange={e => { setMinProfitRateMax(e.target.value); setCurrentPage(1); }}
+                                            placeholder="上限%" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                    </div>
+                                </FilterRow>
+                                <FilterRow label="利益(ポイント込み):">
+                                    <div className="flex gap-1 items-center">
+                                        <input type="number" value={minProfitWithPoints} onChange={e => { setMinProfitWithPoints(e.target.value); setCurrentPage(1); }}
+                                            placeholder="下限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                        <span className="text-slate-400 text-[10px]">~</span>
+                                        <input type="number" value={maxProfitWithPoints} onChange={e => { setMaxProfitWithPoints(e.target.value); setCurrentPage(1); }}
+                                            placeholder="上限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                    </div>
+                                </FilterRow>
+                                <FilterRow label="利益率(ポイント込み):">
+                                    <div className="flex gap-1 items-center">
+                                        <input type="number" value={minProfitRateWithPoints} onChange={e => { setMinProfitRateWithPoints(e.target.value); setCurrentPage(1); }}
+                                            placeholder="下限%" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                        <span className="text-slate-400 text-[10px]">~</span>
+                                        <input type="number" value={maxProfitRateWithPoints} onChange={e => { setMaxProfitRateWithPoints(e.target.value); setCurrentPage(1); }}
+                                            placeholder="上限%" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
+                                    </div>
+                                </FilterRow>
+                            </div>
+
+                            {/* 右カラム */}
+                            <div className="space-y-2">
+                                <FilterRow label="フィルターを保存:">
+                                    <div className="flex gap-1.5">
+                                        {['カスタム1', 'カスタム2', 'カスタム3'].map((name, i) => (
+                                            <div key={i} className="flex flex-col items-center gap-0.5">
+                                                <button onClick={() => saveFilter(`custom${i + 1}`)}
+                                                    className={`px-2.5 py-1 text-[10px] rounded border transition-colors ${
+                                                        savedFilters[`custom${i + 1}`] ? 'bg-cyan-50 border-cyan-400 text-cyan-700' : 'bg-white border-slate-300 text-slate-500 hover:border-cyan-400'
+                                                    }`}>
+                                                    {name}
+                                                </button>
+                                                {savedFilters[`custom${i + 1}`] && (
+                                                    <button onClick={() => loadFilter(`custom${i + 1}`)} className="text-[9px] text-cyan-600 hover:underline">読込</button>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </FilterRow>
+                                <div className="pt-4 flex gap-2">
+                                    <button onClick={clearAllFilters}
+                                        className="flex-1 px-3 py-2 text-xs text-slate-600 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors font-medium">
+                                        フィルタ設定をクリア
+                                    </button>
+                                    <button onClick={() => setShowFilterPanel(false)}
+                                        className="flex-1 px-3 py-2 text-xs text-white bg-cyan-500 hover:bg-cyan-600 rounded-lg transition-colors font-medium">
+                                        フィルタを適用
+                                    </button>
                                 </div>
-                            </div>
-                            <div>
-                                <label className="block text-[10px] font-medium text-slate-500 mb-0.5">最低利益額</label>
-                                <input type="number" value={minProfit} onChange={e => { setMinProfit(e.target.value); setCurrentPage(1); }}
-                                    placeholder="¥" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
-                            </div>
-                            <div>
-                                <label className="block text-[10px] font-medium text-slate-500 mb-0.5">最低利益率</label>
-                                <input type="number" value={minProfitRate} onChange={e => { setMinProfitRate(e.target.value); setCurrentPage(1); }}
-                                    placeholder="%" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
-                            </div>
-                            <div>
-                                <label className="block text-[10px] font-medium text-slate-500 mb-0.5">Amazon価格帯</label>
-                                <div className="flex gap-1 items-center">
-                                    <input type="number" value={minPrice} onChange={e => { setMinPrice(e.target.value); setCurrentPage(1); }}
-                                        placeholder="下限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
-                                    <span className="text-slate-400 text-[10px]">〜</span>
-                                    <input type="number" value={maxPrice} onChange={e => { setMaxPrice(e.target.value); setCurrentPage(1); }}
-                                        placeholder="上限" className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-400 outline-none" />
-                                </div>
-                            </div>
-                            <div className="flex items-end">
-                                <button onClick={() => { setKeyword(''); setMinProfit(''); setMinProfitRate(''); setMinPrice(''); setMaxPrice(''); setStatusFilter('ALL'); setCurrentPage(1); }}
-                                    className="text-[10px] text-slate-500 hover:text-slate-700 px-2 py-1.5 border border-slate-300 rounded">
-                                    リセット
-                                </button>
                             </div>
                         </div>
                     </div>
@@ -364,7 +619,7 @@ const ComparePage: React.FC = () => {
                                 <th className="px-2 py-2.5 font-bold text-sky-800 whitespace-nowrap border-r border-sky-200 w-8">★</th>
                                 <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap border-r border-sky-200">商品画像</th>
                                 <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap border-r border-sky-200">ASIN</th>
-                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap w-[200px] border-r border-sky-200">Keepa</th>
+                                <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap w-[300px] border-r border-sky-200">Keepa</th>
                                 <th className="px-3 py-2.5 font-bold text-sky-800 whitespace-nowrap min-w-[250px] border-r border-sky-200">商品名</th>
                                 <SortHeader label="楽天仕入れ価格" sortKey="rakutenPrice" currentKey={sortKey} dir={sortDir} onClick={handleSort} />
                                 <SortHeader label="Amazon販売価格" sortKey="amazonPrice" currentKey={sortKey} dir={sortDir} onClick={handleSort} />
@@ -382,7 +637,10 @@ const ComparePage: React.FC = () => {
                                 </tr>
                             ) : (
                                 paginatedItems.map(item => (
-                                    <ProductRow key={item.asin} item={item} onPreview={() => setPreviewItem(item)} compareId={compareId || ''} onToggleFavorite={() => toggleFavorite(item.asin)} />
+                                    <ProductRow key={item.asin} item={item} onPreview={() => setPreviewItem(item)} compareId={compareId || ''}
+                                        onToggleFavorite={() => toggleFavorite(item.asin)}
+                                        isConfirmed={confirmedAsins.has(item.asin)}
+                                        onToggleConfirmed={() => toggleConfirmed(item.asin)} />
                                 ))
                             )}
                         </tbody>
@@ -442,6 +700,15 @@ function StatCard({ label, value, color }: { label: string; value: number; color
     );
 }
 
+function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
+    return (
+        <div className="flex items-center gap-2">
+            <span className="text-[11px] font-medium text-slate-600 w-28 flex-shrink-0 text-right">{label}</span>
+            <div className="flex-1">{children}</div>
+        </div>
+    );
+}
+
 function QuickButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
     return (
         <button onClick={onClick}
@@ -471,14 +738,14 @@ function SortHeader({ label, sortKey, currentKey, dir, onClick, isLast = false }
 }
 
 // ===== PoiPoi風 商品行 =====
-function ProductRow({ item, onPreview, compareId, onToggleFavorite }: { item: ComparisonItem; onPreview: () => void; compareId: string; onToggleFavorite: () => void }) {
+function ProductRow({ item, onPreview, compareId, onToggleFavorite, isConfirmed, onToggleConfirmed }: { item: ComparisonItem; onPreview: () => void; compareId: string; onToggleFavorite: () => void; isConfirmed: boolean; onToggleConfirmed: () => void }) {
     const isMatched = item.status === 'MATCHED';
     const isProfitable = item.estimatedProfit !== null && item.estimatedProfit > 0;
     const rakutenPoints = item.rakutenPrice ? Math.round(item.rakutenPrice * (item.rakutenPointRate / 100)) : 0;
     const profitWithPoints = item.estimatedProfit !== null ? item.estimatedProfit + rakutenPoints : null;
 
     // Keepa chart URL（無料の概要グラフ）
-    const keepaChartUrl = `https://graph.keepa.com/pricehistory.png?asin=${item.asin}&domain=co.jp&range=90&width=300&height=130`;
+    const keepaChartUrl = `https://graph.keepa.com/pricehistory.png?asin=${item.asin}&domain=co.jp&range=90&width=450&height=200`;
 
     return (
         <tr className={`hover:bg-slate-50/80 transition-colors ${isProfitable && isMatched ? 'bg-green-50/30' : ''}`}>
@@ -486,6 +753,9 @@ function ProductRow({ item, onPreview, compareId, onToggleFavorite }: { item: Co
             <td className="px-2 py-3 align-top text-center border-r border-slate-200">
                 <button onClick={onToggleFavorite} className="inline-block">
                     <Star className={`w-5 h-5 transition-colors ${item.favorite ? 'fill-yellow-400 text-yellow-400' : 'text-slate-300 hover:text-yellow-400'}`} />
+                </button>
+                <button onClick={onToggleConfirmed} className="inline-block mt-1" title="確認済み">
+                    <CheckCircle className={`w-4 h-4 transition-colors ${isConfirmed ? 'text-green-500' : 'text-slate-200 hover:text-green-400'}`} />
                 </button>
             </td>
             {/* 商品画像 */}
@@ -552,7 +822,7 @@ function ProductRow({ item, onPreview, compareId, onToggleFavorite }: { item: Co
                 <img
                     src={keepaChartUrl}
                     alt="Keepa"
-                    className="w-[180px] h-[80px] object-contain rounded border border-slate-200 bg-white"
+                    className="w-[280px] h-[130px] object-contain rounded border border-slate-200 bg-white"
                     loading="lazy"
                     onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                 />
@@ -665,7 +935,7 @@ function PreviewModal({ item, onClose }: { item: ComparisonItem; onClose: () => 
     const isProfitable = item.estimatedProfit !== null && item.estimatedProfit > 0;
     const rakutenPoints = item.rakutenPrice ? Math.round(item.rakutenPrice * (item.rakutenPointRate / 100)) : 0;
     const profitWithPoints = item.estimatedProfit !== null ? item.estimatedProfit + rakutenPoints : null;
-    const keepaChartUrl = `https://graph.keepa.com/pricehistory.png?asin=${item.asin}&domain=co.jp&range=180&width=500&height=200`;
+    const keepaChartUrl = `https://graph.keepa.com/pricehistory.png?asin=${item.asin}&domain=co.jp&range=180&width=700&height=300`;
 
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
