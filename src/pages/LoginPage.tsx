@@ -89,7 +89,7 @@ const LoginPage: React.FC = () => {
                 </div>
 
                 <p className="text-center text-xs text-slate-400 mt-4">
-                    &copy; {new Date().getFullYear()} PriceChecker. Not affiliated with Amazon.com, Inc.
+                    &copy; {new Date().getFullYear()} PriceChecker
                 </p>
             </div>
         </div>

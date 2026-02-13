@@ -37,7 +37,7 @@ const HistoryPage: React.FC = () => {
                                             <BarChart2 className="w-6 h-6 text-amazon-blue" />
                                         </div>
                                         <div>
-                                            <div className="font-medium text-slate-900">Run ID: {run.id.slice(0, 8)}...</div>
+                                            <div className="font-medium text-slate-900">実行ID: {run.id.slice(0, 8)}...</div>
                                             <div className="text-sm text-slate-500 flex items-center mt-1">
                                                 <Clock className="w-3 h-3 mr-1" />
                                                 {new Date(run.createdAt).toLocaleString()}

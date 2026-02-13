@@ -765,7 +765,7 @@ function ProductRow({ item, onPreview, compareId, onToggleFavorite, isConfirmed,
                         onClick={onPreview} />
                 ) : (
                     <div className="w-16 h-16 rounded border border-slate-200 bg-slate-50 flex items-center justify-center text-slate-300 text-[10px]">
-                        No Image
+                        画像なし
                     </div>
                 )}
                 {isMatched && (

@@ -40,7 +40,7 @@ const Layout: React.FC = () => {
                         </Link>
                         <Link to="/history" className={navItemClass('/history')}>
                             <History className="w-4 h-4" />
-                            History
+                            履歴
                         </Link>
                         {isAdmin && (
                             <Link to="/admin" className={navItemClass('/admin')}>
@@ -71,7 +71,7 @@ const Layout: React.FC = () => {
 
             <footer className="bg-white border-t border-slate-200 py-6">
                 <div className="max-w-7xl mx-auto px-4 text-center text-slate-400 text-sm">
-                    <p>&copy; {new Date().getFullYear()} Amazon Price Checker. Not affiliated with Amazon.com, Inc.</p>
+                    <p>&copy; {new Date().getFullYear()} Amazon Price Checker</p>
                 </div>
             </footer>
         </div>

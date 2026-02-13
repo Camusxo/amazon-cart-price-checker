@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
-import { Upload, FileText, AlertCircle, Loader2, Info, Search as SearchIcon, CheckSquare, Square as SquareIcon, GitCompareArrows, Zap } from 'lucide-react';
+import { Upload, FileText, AlertCircle, Loader2, Info, Search as SearchIcon, CheckSquare, Square as SquareIcon, GitCompareArrows, Zap, FileUp, PenLine } from 'lucide-react';
 import axios from 'axios';
 import { OriginalCsvData, OriginalRowData } from '../types';
 
@@ -438,9 +438,9 @@ const ImportPage: React.FC = () => {
             {/* タブ切替 */}
             <div className="flex border-b border-slate-200">
                 {[
-                    { key: 'csv' as const, label: 'CSV アップロード', icon: '\u{1F4C4}' },
-                    { key: 'text' as const, label: 'テキスト入力', icon: '\u{270F}\u{FE0F}' },
-                    { key: 'keepa' as const, label: 'Keepa検索', icon: '\u{1F50D}' },
+                    { key: 'csv' as const, label: 'CSVアップロード', Icon: FileUp },
+                    { key: 'text' as const, label: 'テキスト入力', Icon: PenLine },
+                    { key: 'keepa' as const, label: 'Keepa検索', Icon: SearchIcon },
                 ].map(tab => (
                     <button key={tab.key} onClick={() => { setActiveTab(tab.key); setError(null); }}
                         className={`flex items-center gap-1.5 px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
@@ -448,7 +448,7 @@ const ImportPage: React.FC = () => {
                                 ? 'border-indigo-500 text-indigo-600'
                                 : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
                         }`}>
-                        <span>{tab.icon}</span> {tab.label}
+                        <tab.Icon className="w-4 h-4" /> {tab.label}
                     </button>
                 ))}
             </div>
