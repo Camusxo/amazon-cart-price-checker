@@ -18,6 +18,8 @@ export interface ProductResult {
   fetchedAt: string;
   status: ItemStatus;
   errorMessage?: string;
+  janCode: string | null;
+  monthlySold: number | null;
 }
 
 export interface RunStats {
@@ -77,6 +79,16 @@ export interface RakutenProduct {
   genreId: string;
 }
 
+export interface RakutenCandidate {
+  title: string;
+  price: number;
+  url: string;
+  shopName: string;
+  imageUrl: string;
+  pointRate: number;
+  similarityScore: number;
+}
+
 export interface ComparisonItem {
   asin: string;
   amazonTitle: string;
@@ -96,6 +108,10 @@ export interface ComparisonItem {
   profitRate: number | null;
   status: ComparisonStatus;
   errorMessage?: string;
+  janCode: string | null;
+  monthlySold: number | null;
+  memo: string;
+  rakutenCandidates: RakutenCandidate[];
 }
 
 export interface ComparisonStats {

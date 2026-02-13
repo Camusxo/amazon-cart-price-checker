@@ -12,7 +12,7 @@ import {
     ChevronRight,
     X,
 } from 'lucide-react';
-import { ComparisonSession, ComparisonItem } from '../types';
+import { ComparisonSession, ComparisonItem, RakutenCandidate } from '../types';
 import { formatCurrency } from '../lib/utils';
 
 const ComparePage: React.FC = () => {
@@ -161,6 +161,8 @@ const ComparePage: React.FC = () => {
         if (!data) return;
         const csv = Papa.unparse(sortedItems.map(i => ({
             ASIN: i.asin,
+            'JANコード': i.janCode || '',
+            '月間販売個数': i.monthlySold !== null ? i.monthlySold : '',
             'Amazon商品名': i.amazonTitle,
             'Amazon販売価格': i.amazonPrice,
             '楽天商品名': i.rakutenTitle || '',
@@ -172,6 +174,7 @@ const ComparePage: React.FC = () => {
             '利益率': i.profitRate !== null ? `${i.profitRate}%` : '',
             '類似度': Math.round(i.similarityScore * 100) + '%',
             'ステータス': i.status,
+            'メモ': i.memo || '',
             'Amazon URL': i.amazonUrl,
             '楽天URL': i.rakutenUrl || '',
         })));
@@ -327,7 +330,7 @@ const ComparePage: React.FC = () => {
                                 <SortHeader label="利益" sortKey="profitRate" currentKey={sortKey} dir={sortDir} onClick={handleSort} />
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100">
+                        <tbody className="divide-y divide-slate-200">
                             {paginatedItems.length === 0 ? (
                                 <tr>
                                     <td colSpan={9} className="p-8 text-center text-slate-400">
@@ -336,7 +339,7 @@ const ComparePage: React.FC = () => {
                                 </tr>
                             ) : (
                                 paginatedItems.map(item => (
-                                    <ProductRow key={item.asin} item={item} onPreview={() => setPreviewItem(item)} />
+                                    <ProductRow key={item.asin} item={item} onPreview={() => setPreviewItem(item)} compareId={compareId || ''} />
                                 ))
                             )}
                         </tbody>
@@ -425,7 +428,7 @@ function SortHeader({ label, sortKey, currentKey, dir, onClick }: {
 }
 
 // ===== PoiPoi風 商品行 =====
-function ProductRow({ item, onPreview }: { item: ComparisonItem; onPreview: () => void }) {
+function ProductRow({ item, onPreview, compareId }: { item: ComparisonItem; onPreview: () => void; compareId: string }) {
     const isMatched = item.status === 'MATCHED';
     const isProfitable = item.estimatedProfit !== null && item.estimatedProfit > 0;
     const rakutenPoints = item.rakutenPrice ? Math.round(item.rakutenPrice * (item.rakutenPointRate / 100)) : 0;
@@ -459,6 +462,14 @@ function ProductRow({ item, onPreview }: { item: ComparisonItem; onPreview: () =
             {/* ASIN */}
             <td className="px-3 py-3 align-top">
                 <div className="font-mono text-[11px] font-bold text-slate-700">{item.asin}</div>
+                {item.janCode && (
+                    <div className="text-[9px] text-slate-400 mt-0.5">JAN {item.janCode}</div>
+                )}
+                {item.monthlySold !== null && item.monthlySold > 0 && (
+                    <div className="mt-1 px-1.5 py-0.5 bg-blue-50 text-blue-700 text-[9px] font-medium rounded inline-block">
+                        月{item.monthlySold}個
+                    </div>
+                )}
                 {item.status === 'PENDING' && (
                     <span className="inline-flex items-center text-[10px] text-blue-500 mt-1">
                         <span className="animate-spin h-2.5 w-2.5 border-2 border-blue-400 rounded-full border-t-transparent mr-0.5" />
@@ -474,6 +485,17 @@ function ProductRow({ item, onPreview }: { item: ComparisonItem; onPreview: () =
                 {isMatched && (
                     <span className="inline-block mt-1 px-1.5 py-0.5 bg-green-100 text-green-700 text-[9px] font-medium rounded">マッチ</span>
                 )}
+                {/* メモ欄 */}
+                <textarea
+                    className="mt-1.5 w-full text-[10px] text-slate-600 border border-slate-200 rounded px-1.5 py-1 resize-none focus:ring-1 focus:ring-indigo-300 outline-none"
+                    rows={2}
+                    maxLength={200}
+                    placeholder="メモを入力（200文字まで）"
+                    defaultValue={item.memo || ''}
+                    onBlur={(e) => {
+                        axios.patch(`/api/compare/${compareId}/items/${item.asin}/memo`, { memo: e.target.value });
+                    }}
+                />
             </td>
 
             {/* Keepa チャート */}
@@ -500,13 +522,24 @@ function ProductRow({ item, onPreview }: { item: ComparisonItem; onPreview: () =
                         {item.amazonTitle}
                     </a>
                 </div>
-                {/* 楽天 */}
-                {isMatched && item.rakutenTitle && (
+                {/* 楽天候補（複数表示） */}
+                {isMatched && item.rakutenCandidates && item.rakutenCandidates.length > 0 ? (
+                    item.rakutenCandidates.map((candidate, idx) => (
+                        <div key={idx} className={`${idx > 0 ? 'mt-1.5 pt-1.5 border-t border-dashed border-slate-200' : ''}`}>
+                            <span className="inline-block px-1.5 py-0.5 bg-rose-500 text-white text-[9px] font-bold rounded mr-1">楽天{idx + 1}</span>
+                            <span className="text-[10px] text-blue-600 font-medium">{candidate.shopName}</span>
+                            <span className="text-[10px] text-slate-400 ml-1">({Math.round(candidate.similarityScore * 100)}%)</span>
+                            <a href={candidate.url} target="_blank" rel="noopener noreferrer"
+                                className="block text-[10px] text-slate-600 hover:underline leading-tight line-clamp-1 mt-0.5">
+                                {candidate.title}
+                            </a>
+                            <span className="text-[10px] font-bold text-rose-600">{formatCurrency(candidate.price, 'JPY')}</span>
+                        </div>
+                    ))
+                ) : isMatched && item.rakutenTitle ? (
                     <div>
                         <span className="inline-block px-1.5 py-0.5 bg-rose-500 text-white text-[9px] font-bold rounded mr-1">楽天</span>
-                        {item.rakutenShop && (
-                            <span className="text-[10px] text-blue-600 font-medium">{item.rakutenShop}</span>
-                        )}
+                        {item.rakutenShop && <span className="text-[10px] text-blue-600 font-medium">{item.rakutenShop}</span>}
                         {item.rakutenUrl ? (
                             <a href={item.rakutenUrl} target="_blank" rel="noopener noreferrer"
                                 className="block text-[10px] text-slate-600 hover:underline leading-tight line-clamp-2 mt-0.5">
@@ -516,10 +549,9 @@ function ProductRow({ item, onPreview }: { item: ComparisonItem; onPreview: () =
                             <div className="text-[10px] text-slate-600 line-clamp-2 mt-0.5">{item.rakutenTitle}</div>
                         )}
                     </div>
-                )}
-                {!isMatched && item.status !== 'PENDING' && (
+                ) : !isMatched && item.status !== 'PENDING' ? (
                     <div className="text-[10px] text-slate-400 italic">楽天マッチなし</div>
-                )}
+                ) : null}
             </td>
 
             {/* 楽天仕入れ価格 */}
@@ -608,13 +640,28 @@ function PreviewModal({ item, onClose }: { item: ComparisonItem; onClose: () => 
                                 <span className="inline-block px-1.5 py-0.5 bg-amber-500 text-white text-[9px] font-bold rounded mr-1">Amazon</span>
                                 <span className="text-sm text-slate-800">{item.amazonTitle}</span>
                             </div>
-                            {item.rakutenTitle && (
+                            {item.rakutenCandidates && item.rakutenCandidates.length > 0 ? (
+                                <div className="space-y-1.5">
+                                    {item.rakutenCandidates.map((candidate, idx) => (
+                                        <div key={idx} className={`${idx > 0 ? 'pt-1.5 border-t border-dashed border-slate-200' : ''}`}>
+                                            <span className="inline-block px-1.5 py-0.5 bg-rose-500 text-white text-[9px] font-bold rounded mr-1">楽天{idx + 1}</span>
+                                            <span className="text-xs text-blue-600 font-medium">{candidate.shopName}</span>
+                                            <span className="text-xs text-slate-400 ml-1">({Math.round(candidate.similarityScore * 100)}%)</span>
+                                            <a href={candidate.url} target="_blank" rel="noopener noreferrer"
+                                                className="block text-xs text-slate-600 hover:underline leading-tight mt-0.5">
+                                                {candidate.title}
+                                            </a>
+                                            <span className="text-xs font-bold text-rose-600">{formatCurrency(candidate.price, 'JPY')}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : item.rakutenTitle ? (
                                 <div>
                                     <span className="inline-block px-1.5 py-0.5 bg-rose-500 text-white text-[9px] font-bold rounded mr-1">楽天</span>
                                     <span className="text-xs text-slate-600">{item.rakutenTitle}</span>
                                     {item.rakutenShop && <span className="text-xs text-slate-400 ml-2">({item.rakutenShop})</span>}
                                 </div>
-                            )}
+                            ) : null}
                         </div>
                     </div>
 
