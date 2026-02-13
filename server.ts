@@ -448,8 +448,11 @@ const searchRakuten = async (keyword: string): Promise<RakutenProduct[]> => {
             params.accessKey = RAKUTEN_ACCESS_KEY;
         }
 
-        const response = await axios.get('https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601', {
+        const response = await axios.get('https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601', {
             params,
+            headers: {
+                'Referer': 'https://amazon-price-checker-xohy.onrender.com',
+            },
             timeout: 10000,
         });
 
@@ -754,32 +757,20 @@ app.get('/api/rakuten-test', async (_req, res) => {
 
         console.log('Rakuten test params:', JSON.stringify(params));
 
-        // 旧エンドポイント
+        const headers = { 'Referer': 'https://amazon-price-checker-xohy.onrender.com' };
         try {
-            const res1 = await axios.get('https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601', {
-                params, timeout: 10000,
+            const res1 = await axios.get('https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601', {
+                params, headers, timeout: 10000,
             });
-            res.json({ endpoint: 'old', status: 'OK', count: res1.data.Items?.length || 0, firstItem: res1.data.Items?.[0]?.itemName || null });
+            const items = res1.data.Items || res1.data.items || [];
+            res.json({ endpoint: 'new+referer', status: 'OK', count: items.length, firstItem: items[0]?.itemName || items[0]?.ItemName || null });
             return;
         } catch (e: unknown) {
             const err = e as { response?: { status: number; data?: unknown } };
-            console.log('Old endpoint error:', err.response?.status, JSON.stringify(err.response?.data));
-
-            // 旧エンドポイントが失敗した場合、新エンドポイントを試す
-            try {
-                const res2 = await axios.get('https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601', {
-                    params, timeout: 10000,
-                });
-                res.json({ endpoint: 'new', status: 'OK', count: res2.data.Items?.length || 0, firstItem: res2.data.Items?.[0]?.itemName || null });
-                return;
-            } catch (e2: unknown) {
-                const err2 = e2 as { response?: { status: number; data?: unknown } };
-                res.json({
-                    old: { status: err.response?.status, data: err.response?.data },
-                    new: { status: err2.response?.status, data: err2.response?.data },
-                    params: { ...params, applicationId: params.applicationId ? '***SET***' : '***MISSING***', accessKey: params.accessKey ? '***SET***' : '***MISSING***' },
-                });
-            }
+            res.json({
+                error: { status: err.response?.status, data: err.response?.data },
+                params: { ...params, applicationId: params.applicationId ? '***SET***' : '***MISSING***', accessKey: params.accessKey ? '***SET***' : '***MISSING***' },
+            });
         }
     } catch (error: unknown) {
         const err = error as { message?: string };
