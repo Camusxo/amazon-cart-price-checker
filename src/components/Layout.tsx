@@ -1,13 +1,18 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { ShoppingCart, History, UploadCloud } from 'lucide-react';
+import { ShoppingCart, History, UploadCloud, GitCompareArrows } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const Layout: React.FC = () => {
     const location = useLocation();
 
+    const isActive = (path: string) => {
+        if (path === '/') return location.pathname === '/';
+        return location.pathname.startsWith(path);
+    };
+
     const navItemClass = (path: string) => cn(
-        "flex items-center gap-2 px-4 py-2 rounded-md transition-colors",
-        location.pathname === path
+        "flex items-center gap-2 px-4 py-2 rounded-md transition-colors text-sm",
+        isActive(path)
             ? "bg-amazon-blue text-white font-medium shadow-sm"
             : "text-slate-600 hover:bg-slate-200"
     );
@@ -22,11 +27,11 @@ const Layout: React.FC = () => {
                         </div>
                         <div>
                             <h1 className="text-xl font-bold text-slate-800 leading-none">PriceChecker</h1>
-                            <span className="text-xs text-slate-500 font-medium">Keepa API Edition</span>
+                            <span className="text-xs text-slate-500 font-medium">Keepa + 楽天 Edition</span>
                         </div>
                     </div>
 
-                    <nav className="flex items-center gap-2">
+                    <nav className="flex items-center gap-1">
                         <Link to="/" className={navItemClass('/')}>
                             <UploadCloud className="w-4 h-4" />
                             Import

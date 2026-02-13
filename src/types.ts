@@ -61,3 +61,64 @@ export interface OriginalCsvData {
   priceColumn: string | null;
   rows: OriginalRowData[];
 }
+
+// --- 楽天比較関連 ---
+
+export type ComparisonStatus = 'MATCHED' | 'NO_MATCH' | 'PENDING' | 'ERROR';
+
+export interface RakutenProduct {
+  itemName: string;
+  itemPrice: number;
+  itemUrl: string;
+  shopName: string;
+  shopUrl: string;
+  imageUrl: string;
+  pointRate: number;
+  genreId: string;
+}
+
+export interface ComparisonItem {
+  asin: string;
+  amazonTitle: string;
+  amazonPrice: number;
+  amazonUrl: string;
+  rakutenTitle: string | null;
+  rakutenPrice: number | null;
+  rakutenUrl: string | null;
+  rakutenShop: string | null;
+  rakutenImageUrl: string | null;
+  rakutenPointRate: number;
+  similarityScore: number;
+  priceDiff: number | null;
+  priceDiffPercent: number | null;
+  estimatedFee: number;
+  estimatedProfit: number | null;
+  profitRate: number | null;
+  status: ComparisonStatus;
+  errorMessage?: string;
+}
+
+export interface ComparisonStats {
+  total: number;
+  processed: number;
+  matched: number;
+  profitable: number;
+}
+
+export interface ComparisonSession {
+  id: string;
+  runId: string;
+  createdAt: number;
+  items: ComparisonItem[];
+  isRunning: boolean;
+  stats: ComparisonStats;
+}
+
+export interface ComparisonSummary {
+  id: string;
+  runId: string;
+  createdAt: number;
+  total: number;
+  matched: number;
+  profitable: number;
+}

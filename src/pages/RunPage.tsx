@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import Papa from 'papaparse';
 import {
@@ -9,7 +9,9 @@ import {
     ChevronDown,
     ChevronUp,
     FileSpreadsheet,
-    FilePlus
+    FilePlus,
+    GitCompareArrows,
+    Loader2,
 } from 'lucide-react';
 import { RunSession, ItemStatus, OriginalCsvData } from '../types';
 import { getStatusColor, formatCurrency } from '../lib/utils';
@@ -20,11 +22,13 @@ interface ExtendedRunSession extends RunSession {
 
 const RunPage: React.FC = () => {
     const { runId } = useParams();
+    const navigate = useNavigate();
     const [data, setData] = useState<ExtendedRunSession | null>(null);
     const [filterStatus, setFilterStatus] = useState<string>('ALL');
     const [search, setSearch] = useState('');
     const [showLogs, setShowLogs] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [startingCompare, setStartingCompare] = useState(false);
 
     const fetchData = async () => {
         try {
@@ -53,6 +57,19 @@ const RunPage: React.FC = () => {
             fetchData();
         } catch {
             alert("リトライに失敗しました");
+        }
+    };
+
+    const handleStartCompare = async () => {
+        if (!runId) return;
+        setStartingCompare(true);
+        try {
+            const res = await axios.post('/api/compare', { runId });
+            navigate(`/compare/${res.data.compareId}`);
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { error?: string } } };
+            alert(error.response?.data?.error || '楽天比較の開始に失敗しました');
+            setStartingCompare(false);
         }
     };
 
@@ -176,6 +193,19 @@ const RunPage: React.FC = () => {
                         </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
+                        {!data.isRunning && data.stats.success > 0 && (
+                            <button
+                                onClick={handleStartCompare}
+                                disabled={startingCompare}
+                                className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors disabled:opacity-50"
+                            >
+                                {startingCompare ? (
+                                    <><Loader2 className="w-4 h-4 animate-spin" /> 開始中...</>
+                                ) : (
+                                    <><GitCompareArrows className="w-4 h-4" /> 楽天比較を開始</>
+                                )}
+                            </button>
+                        )}
                         {data.stats.failed > 0 && !data.isRunning && (
                             <button
                                 onClick={handleRetry}

@@ -89,6 +89,7 @@ const PORT = process.env.PORT || 3000;
 const KEEPA_API_KEY = process.env.KEEPA_API_KEY;
 const KEEPA_DOMAIN = Number(process.env.KEEPA_DOMAIN || 5);
 const CACHE_TTL = Number(process.env.CACHE_TTL_SECONDS || 3600);
+const RAKUTEN_APP_ID = process.env.RAKUTEN_APP_ID;
 
 const DOMAIN_CURRENCY_MAP: Record<number, { currency: string; urlDomain: string }> = {
     1: { currency: 'USD', urlDomain: 'www.amazon.com' },
@@ -105,9 +106,60 @@ const DOMAIN_CURRENCY_MAP: Record<number, { currency: string; urlDomain: string 
     12: { currency: 'BRL', urlDomain: 'www.amazon.com.br' },
 };
 
+// --- 比較関連の型定義 ---
+
+type ComparisonStatus = 'MATCHED' | 'NO_MATCH' | 'PENDING' | 'ERROR';
+
+interface RakutenProduct {
+    itemName: string;
+    itemPrice: number;
+    itemUrl: string;
+    shopName: string;
+    shopUrl: string;
+    imageUrl: string;
+    pointRate: number;
+    genreId: string;
+}
+
+interface ComparisonItem {
+    asin: string;
+    amazonTitle: string;
+    amazonPrice: number;
+    amazonUrl: string;
+    rakutenTitle: string | null;
+    rakutenPrice: number | null;
+    rakutenUrl: string | null;
+    rakutenShop: string | null;
+    rakutenImageUrl: string | null;
+    rakutenPointRate: number;
+    similarityScore: number;
+    priceDiff: number | null;
+    priceDiffPercent: number | null;
+    estimatedFee: number;
+    estimatedProfit: number | null;
+    profitRate: number | null;
+    status: ComparisonStatus;
+    errorMessage?: string;
+}
+
+interface ComparisonSession {
+    id: string;
+    runId: string;
+    createdAt: number;
+    items: ComparisonItem[];
+    isRunning: boolean;
+    stats: {
+        total: number;
+        processed: number;
+        matched: number;
+        profitable: number;
+    };
+}
+
 // --- 状態管理（インメモリ） ---
 const runs: Record<string, RunSession> = {};
 const itemCache: Record<string, { data: ProductResult; expiresAt: number }> = {};
+const comparisons: Record<string, ComparisonSession> = {};
 
 // --- Express設定 ---
 const app = express();
@@ -362,6 +414,186 @@ const processQueue = async (runId: string): Promise<void> => {
     setTimeout(() => processQueue(runId), 500);
 };
 
+// --- 楽天API関連 ---
+
+const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+const searchRakuten = async (keyword: string): Promise<RakutenProduct[]> => {
+    if (!RAKUTEN_APP_ID) {
+        throw new Error('RAKUTEN_APP_ID が設定されていません。');
+    }
+
+    // 検索キーワードを最適化（長すぎる商品名から主要キーワードを抽出）
+    const optimizedKeyword = keyword
+        .replace(/[\[\]【】（）()「」『』]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split(' ')
+        .filter(w => w.length > 1)
+        .slice(0, 5)
+        .join(' ');
+
+    if (!optimizedKeyword) return [];
+
+    try {
+        const response = await axios.get('https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601', {
+            params: {
+                applicationId: RAKUTEN_APP_ID,
+                keyword: optimizedKeyword,
+                hits: 30,
+                sort: '+itemPrice',
+                formatVersion: 2,
+            },
+            timeout: 10000,
+        });
+
+        const items = response.data.Items || [];
+        return items.map((item: Record<string, unknown>) => ({
+            itemName: item.itemName as string,
+            itemPrice: item.itemPrice as number,
+            itemUrl: item.itemUrl as string,
+            shopName: item.shopName as string,
+            shopUrl: item.shopUrl as string || '',
+            imageUrl: ((item.mediumImageUrls as string[]) || [])[0] || '',
+            pointRate: (item.pointRate as number) || 1,
+            genreId: String(item.genreId || ''),
+        }));
+    } catch (error: unknown) {
+        const err = error as { response?: { status: number; data?: { error_description?: string } } };
+        if (err.response?.status === 429) {
+            throw new Error('RAKUTEN_THROTTLED');
+        }
+        if (err.response?.status === 404) {
+            return [];
+        }
+        throw error;
+    }
+};
+
+// bigram Dice coefficient による文字列類似度
+const getBigrams = (str: string): Set<string> => {
+    const s = str.toLowerCase().replace(/\s+/g, '');
+    const bigrams = new Set<string>();
+    for (let i = 0; i < s.length - 1; i++) {
+        bigrams.add(s.substring(i, i + 2));
+    }
+    return bigrams;
+};
+
+const calculateSimilarity = (str1: string, str2: string): number => {
+    if (!str1 || !str2) return 0;
+    const bigrams1 = getBigrams(str1);
+    const bigrams2 = getBigrams(str2);
+    if (bigrams1.size === 0 || bigrams2.size === 0) return 0;
+
+    let intersection = 0;
+    bigrams1.forEach(bg => {
+        if (bigrams2.has(bg)) intersection++;
+    });
+
+    return (2 * intersection) / (bigrams1.size + bigrams2.size);
+};
+
+// Amazon手数料概算（カテゴリ問わず15%）
+const estimateAmazonFee = (price: number): number => {
+    return Math.round(price * 0.15);
+};
+
+// 比較キュー処理
+const processComparisonQueue = async (compareId: string): Promise<void> => {
+    const session = comparisons[compareId];
+    if (!session || !session.isRunning) return;
+
+    const pendingItems = session.items.filter(i => i.status === 'PENDING');
+    if (pendingItems.length === 0) {
+        session.isRunning = false;
+        return;
+    }
+
+    for (const item of pendingItems) {
+        if (!session.isRunning) break;
+
+        try {
+            const rakutenResults = await searchRakuten(item.amazonTitle);
+
+            if (rakutenResults.length === 0) {
+                item.status = 'NO_MATCH';
+                item.rakutenTitle = null;
+                item.rakutenPrice = null;
+                session.stats.processed++;
+                await delay(1100); // レート制限対応
+                continue;
+            }
+
+            // 最も類似度が高い商品を選択
+            let bestMatch: RakutenProduct | null = null;
+            let bestScore = 0;
+
+            for (const rp of rakutenResults) {
+                const score = calculateSimilarity(item.amazonTitle, rp.itemName);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = rp;
+                }
+            }
+
+            // 類似度閾値（0.2以上でマッチ判定）
+            if (bestMatch && bestScore >= 0.2) {
+                item.status = 'MATCHED';
+                item.rakutenTitle = bestMatch.itemName;
+                item.rakutenPrice = bestMatch.itemPrice;
+                item.rakutenUrl = bestMatch.itemUrl;
+                item.rakutenShop = bestMatch.shopName;
+                item.rakutenImageUrl = bestMatch.imageUrl;
+                item.rakutenPointRate = bestMatch.pointRate;
+                item.similarityScore = bestScore;
+
+                // 価格差計算
+                item.priceDiff = item.amazonPrice - bestMatch.itemPrice;
+                item.priceDiffPercent = Math.round(((item.amazonPrice - bestMatch.itemPrice) / item.amazonPrice) * 100 * 10) / 10;
+
+                // 利益計算: Amazon販売価格 - 楽天仕入価格 - Amazon手数料
+                item.estimatedFee = estimateAmazonFee(item.amazonPrice);
+                item.estimatedProfit = item.amazonPrice - bestMatch.itemPrice - item.estimatedFee;
+                item.profitRate = Math.round((item.estimatedProfit / item.amazonPrice) * 100 * 10) / 10;
+
+                session.stats.matched++;
+                if (item.estimatedProfit > 0) {
+                    session.stats.profitable++;
+                }
+            } else {
+                item.status = 'NO_MATCH';
+                // 類似度が低くても最安値の楽天商品を参考表示
+                if (bestMatch) {
+                    item.rakutenTitle = bestMatch.itemName;
+                    item.rakutenPrice = bestMatch.itemPrice;
+                    item.rakutenUrl = bestMatch.itemUrl;
+                    item.rakutenShop = bestMatch.shopName;
+                    item.similarityScore = bestScore;
+                }
+            }
+
+            session.stats.processed++;
+
+        } catch (error: unknown) {
+            const err = error as { message?: string };
+            if (err.message === 'RAKUTEN_THROTTLED') {
+                // レート制限時は3秒待って再試行
+                await delay(3000);
+                continue;
+            }
+            item.status = 'ERROR';
+            item.errorMessage = err.message || '楽天API検索エラー';
+            session.stats.processed++;
+        }
+
+        // 楽天API レート制限: 1リクエスト/秒
+        await delay(1100);
+    }
+
+    session.isRunning = false;
+};
+
 // --- APIルート ---
 
 app.post('/api/runs', (req, res) => {
@@ -488,10 +720,132 @@ app.get('/api/history', (_req, res) => {
 app.get('/api/status', (_req, res) => {
     res.json({
         apiConfigured: !!KEEPA_API_KEY,
+        rakutenConfigured: !!RAKUTEN_APP_ID,
         apiType: 'Keepa',
         domain: KEEPA_DOMAIN,
         domainInfo: DOMAIN_CURRENCY_MAP[KEEPA_DOMAIN] || DOMAIN_CURRENCY_MAP[5],
     });
+});
+
+// --- 楽天比較APIルート ---
+
+app.post('/api/compare', (req, res) => {
+    const { runId } = req.body;
+    if (!runId) {
+        res.status(400).json({ error: 'runIdが必要です' });
+        return;
+    }
+
+    const run = runs[runId];
+    if (!run) {
+        res.status(404).json({ error: '実行セッションが見つかりません' });
+        return;
+    }
+
+    if (!RAKUTEN_APP_ID) {
+        res.status(500).json({ error: 'RAKUTEN_APP_IDが設定されていません' });
+        return;
+    }
+
+    // OK ステータスの商品のみ比較対象
+    const okItems = run.items.filter(i => i.status === ItemStatus.OK && i.priceAmount && i.title);
+
+    if (okItems.length === 0) {
+        res.status(400).json({ error: '比較可能な商品がありません（価格取得済みの商品が必要です）' });
+        return;
+    }
+
+    const compareId = uuidv4();
+    const comparisonItems: ComparisonItem[] = okItems.map(item => ({
+        asin: item.asin,
+        amazonTitle: item.title!,
+        amazonPrice: item.priceAmount!,
+        amazonUrl: item.detailUrl || `https://www.amazon.co.jp/dp/${item.asin}`,
+        rakutenTitle: null,
+        rakutenPrice: null,
+        rakutenUrl: null,
+        rakutenShop: null,
+        rakutenImageUrl: null,
+        rakutenPointRate: 1,
+        similarityScore: 0,
+        priceDiff: null,
+        priceDiffPercent: null,
+        estimatedFee: estimateAmazonFee(item.priceAmount!),
+        estimatedProfit: null,
+        profitRate: null,
+        status: 'PENDING' as ComparisonStatus,
+    }));
+
+    comparisons[compareId] = {
+        id: compareId,
+        runId,
+        createdAt: Date.now(),
+        items: comparisonItems,
+        isRunning: true,
+        stats: {
+            total: comparisonItems.length,
+            processed: 0,
+            matched: 0,
+            profitable: 0,
+        },
+    };
+
+    // 古い比較セッションを削除（最大5件保持）
+    const sortedIds = Object.keys(comparisons).sort((a, b) => comparisons[b].createdAt - comparisons[a].createdAt);
+    if (sortedIds.length > 5) {
+        delete comparisons[sortedIds[sortedIds.length - 1]];
+    }
+
+    processComparisonQueue(compareId);
+
+    res.json({ compareId });
+});
+
+app.get('/api/compare/:compareId', (req, res) => {
+    const { compareId } = req.params;
+    const session = comparisons[compareId];
+    if (!session) {
+        res.status(404).json({ error: '比較セッションが見つかりません' });
+        return;
+    }
+    res.json(session);
+});
+
+app.post('/api/compare/:compareId/refresh', (req, res) => {
+    const { compareId } = req.params;
+    const session = comparisons[compareId];
+    if (!session) {
+        res.status(404).json({ error: '比較セッションが見つかりません' });
+        return;
+    }
+
+    if (session.isRunning) {
+        res.status(400).json({ error: '現在処理中です' });
+        return;
+    }
+
+    // 全アイテムをPENDINGにリセット
+    session.items.forEach(item => {
+        item.status = 'PENDING';
+        item.rakutenTitle = null;
+        item.rakutenPrice = null;
+        item.rakutenUrl = null;
+        item.rakutenShop = null;
+        item.rakutenImageUrl = null;
+        item.similarityScore = 0;
+        item.priceDiff = null;
+        item.priceDiffPercent = null;
+        item.estimatedProfit = null;
+        item.profitRate = null;
+        item.errorMessage = undefined;
+    });
+
+    session.stats = { total: session.items.length, processed: 0, matched: 0, profitable: 0 };
+    session.isRunning = true;
+
+    processComparisonQueue(compareId);
+
+    res.json({ message: '楽天価格を再取得中' });
 });
 
 // --- フロントエンド配信（本番環境） ---
@@ -504,6 +858,6 @@ if (process.env.NODE_ENV !== 'development') {
 
 app.listen(PORT, () => {
     console.log(`サーバー起動: ポート ${PORT}`);
-    console.log(`API: Keepa (ドメイン: ${KEEPA_DOMAIN})`);
-    console.log(`APIキー設定: ${KEEPA_API_KEY ? '✓ 設定済み' : '✗ 未設定'}`);
+    console.log(`Keepa API: (ドメイン: ${KEEPA_DOMAIN}) ${KEEPA_API_KEY ? '✓ 設定済み' : '✗ 未設定'}`);
+    console.log(`楽天API: ${RAKUTEN_APP_ID ? '✓ 設定済み' : '✗ 未設定'}`);
 });

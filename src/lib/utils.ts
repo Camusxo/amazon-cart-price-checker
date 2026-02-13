@@ -28,3 +28,8 @@ export const STATUS_COLORS: Record<ItemStatus, string> = {
 export function getStatusColor(status: ItemStatus) {
     return STATUS_COLORS[status] || "bg-gray-100";
 }
+
+export function formatProfitRate(rate: number | null): string {
+    if (rate === null) return '-';
+    return `${rate > 0 ? '+' : ''}${rate}%`;
+}

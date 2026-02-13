@@ -12,5 +12,7 @@ services:
         sync: false
       - key: KEEPA_DOMAIN
         value: "5"
+      - key: RAKUTEN_APP_ID
+        sync: false
       - key: PORT
         value: "10000"
