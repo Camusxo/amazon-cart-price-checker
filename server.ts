@@ -448,7 +448,7 @@ const searchRakuten = async (keyword: string): Promise<RakutenProduct[]> => {
             params.accessKey = RAKUTEN_ACCESS_KEY;
         }
 
-        const response = await axios.get('https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601', {
+        const response = await axios.get('https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601', {
             params,
             timeout: 10000,
         });
