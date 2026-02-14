@@ -742,9 +742,25 @@ const calculateSimilarity = (str1: string, str2: string): number => {
     return (2 * intersection) / (bigrams1.size + bigrams2.size);
 };
 
-// Amazon手数料概算（カテゴリ問わず15%）
+// Amazon手数料概算（販売手数料15% + FBA配送代行手数料）
+// QUICKSHOPの計算に準拠: 販売手数料 + FBA配送料
 const estimateAmazonFee = (price: number): number => {
-    return Math.round(price * 0.15);
+    // 販売手数料: 15%（大半のカテゴリ）
+    const referralFee = Math.round(price * 0.15);
+    // FBA配送代行手数料（サイズ別概算）
+    // 小型: ~434円, 標準: ~514円, 大型標準: ~603円, 大型: ~712円+
+    // 価格帯から推定サイズを判定
+    let fbaFee: number;
+    if (price <= 1500) {
+        fbaFee = 434;  // 小型軽量
+    } else if (price <= 5000) {
+        fbaFee = 514;  // 標準サイズ
+    } else if (price <= 10000) {
+        fbaFee = 603;  // やや大きめ標準
+    } else {
+        fbaFee = 712;  // 大型
+    }
+    return referralFee + fbaFee;
 };
 
 // 比較キュー処理
@@ -1069,32 +1085,67 @@ app.post('/api/keepa-query', authMiddleware, async (req, res) => {
     }
 
     try {
-        const response = await axios.get('https://api.keepa.com/query', {
-            params: {
-                key: KEEPA_API_KEY,
-                domain: parsedDomain,
-                selection: JSON.stringify(parsedSelection),
-            },
-            timeout: 60000, // クエリは時間がかかる場合がある
-        });
+        // 最大ページ数（トークン消費を考慮して制限）
+        const maxPages = req.body.maxPages || 5;
+        let allAsinList: string[] = [];
+        let totalResults = 0;
+        let tokensLeft = 0;
+        let totalTokensConsumed = 0;
+        let page = 0;
 
-        const data = response.data;
-        if (data.error) {
-            res.status(400).json({ error: data.error.message || 'Keepaクエリエラー' });
-            return;
+        // 複数ページ取得でより多くの結果を取得
+        while (page < maxPages) {
+            const response = await axios.get('https://api.keepa.com/query', {
+                params: {
+                    key: KEEPA_API_KEY,
+                    domain: parsedDomain,
+                    selection: JSON.stringify(parsedSelection),
+                    page,
+                },
+                timeout: 60000,
+            });
+
+            const data = response.data;
+            if (data.error) {
+                if (page === 0) {
+                    res.status(400).json({ error: data.error.message || 'Keepaクエリエラー' });
+                    return;
+                }
+                break; // 2ページ目以降のエラーは取得済み分で返す
+            }
+
+            const pageAsins: string[] = data.asinList || [];
+            totalResults = data.totalResults || totalResults;
+            tokensLeft = data.tokensLeft || 0;
+            totalTokensConsumed += data.tokensConsumed || 0;
+
+            allAsinList = allAsinList.concat(pageAsins);
+
+            // 次ページがない場合（取得数が0、または全件取得済み）
+            if (pageAsins.length === 0 || allAsinList.length >= totalResults) {
+                break;
+            }
+
+            page++;
+
+            // ページ間に少し待機（レート制限対策）
+            if (page < maxPages) {
+                await delay(500);
+            }
         }
 
-        const asinList: string[] = data.asinList || [];
-        const totalResults: number = data.totalResults || asinList.length;
+        // 重複除去
+        allAsinList = [...new Set(allAsinList)];
 
         res.json({
-            asinList,
+            asinList: allAsinList,
             totalResults,
-            returnedCount: asinList.length,
+            returnedCount: allAsinList.length,
+            pagesRetrieved: page + 1,
             selection: parsedSelection,
             domain: parsedDomain,
-            tokensLeft: data.tokensLeft,
-            tokensConsumed: data.tokensConsumed,
+            tokensLeft,
+            tokensConsumed: totalTokensConsumed,
         });
     } catch (error: unknown) {
         const err = error as { response?: { status: number; data?: any }; message?: string };
