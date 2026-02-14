@@ -1085,8 +1085,9 @@ app.post('/api/keepa-query', authMiddleware, async (req, res) => {
     }
 
     try {
-        // 最大ページ数（トークン消費を考慮して制限）
-        const maxPages = req.body.maxPages || 5;
+        // 最大5000件取得（1ページ≒100件 → 最大50ページ）
+        const maxResults = req.body.maxResults || 5000;
+        const maxPages = Math.min(req.body.maxPages || 50, 50);
         let allAsinList: string[] = [];
         let totalResults = 0;
         let tokensLeft = 0;
@@ -1121,8 +1122,8 @@ app.post('/api/keepa-query', authMiddleware, async (req, res) => {
 
             allAsinList = allAsinList.concat(pageAsins);
 
-            // 次ページがない場合（取得数が0、または全件取得済み）
-            if (pageAsins.length === 0 || allAsinList.length >= totalResults) {
+            // 次ページがない場合（取得数が0、全件取得済み、または上限到達）
+            if (pageAsins.length === 0 || allAsinList.length >= totalResults || allAsinList.length >= maxResults) {
                 break;
             }
 
