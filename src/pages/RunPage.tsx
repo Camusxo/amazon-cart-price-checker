@@ -54,11 +54,11 @@ const RunPage: React.FC = () => {
         return () => clearInterval(interval);
     }, [runId, data?.isRunning]);
 
-    // autoCompare=true の場合、Keepa処理が一定数完了したら自動的に楽天比較を開始
+    // autoCompare=true の場合、Keepa処理が全件完了してから楽天比較を開始
     useEffect(() => {
         if (autoCompare && !autoCompareTriggered && data && !startingCompare) {
-            // 処理完了 or 成功件数が5件以上の場合に自動開始
-            if (!data.isRunning || data.stats.success >= 5) {
+            // Keepa処理が完了し、成功件数が1件以上の場合に自動開始
+            if (!data.isRunning && data.stats.success >= 1) {
                 setAutoCompareTriggered(true);
                 handleStartCompareNow();
             }
