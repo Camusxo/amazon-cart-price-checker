@@ -888,6 +888,82 @@ app.get('/api/keepa-search', authMiddleware, async (req, res) => {
     }
 });
 
+// --- Keepaクエリ（Product Finder）API ---
+app.post('/api/keepa-query', authMiddleware, async (req, res) => {
+    const { queryUrl, selection, domain } = req.body;
+
+    if (!KEEPA_API_KEY) {
+        res.status(500).json({ error: 'KEEPA_API_KEYが設定されていません' });
+        return;
+    }
+
+    let parsedSelection: any;
+    let parsedDomain: number = KEEPA_DOMAIN;
+
+    // URLからパラメータを解析
+    if (queryUrl) {
+        try {
+            const url = new URL(queryUrl);
+            const selectionParam = url.searchParams.get('selection');
+            const domainParam = url.searchParams.get('domain');
+            if (!selectionParam) {
+                res.status(400).json({ error: 'URLにselectionパラメータが見つかりません' });
+                return;
+            }
+            parsedSelection = JSON.parse(selectionParam);
+            if (domainParam) parsedDomain = parseInt(domainParam, 10);
+        } catch (e) {
+            res.status(400).json({ error: 'URLの解析に失敗しました。正しいKeepaクエリURLを入力してください' });
+            return;
+        }
+    } else if (selection) {
+        parsedSelection = selection;
+        if (domain) parsedDomain = domain;
+    } else {
+        res.status(400).json({ error: 'queryUrl または selection パラメータが必要です' });
+        return;
+    }
+
+    try {
+        const response = await axios.get('https://api.keepa.com/query', {
+            params: {
+                key: KEEPA_API_KEY,
+                domain: parsedDomain,
+                selection: JSON.stringify(parsedSelection),
+            },
+            timeout: 60000, // クエリは時間がかかる場合がある
+        });
+
+        const data = response.data;
+        if (data.error) {
+            res.status(400).json({ error: data.error.message || 'Keepaクエリエラー' });
+            return;
+        }
+
+        const asinList: string[] = data.asinList || [];
+
+        res.json({
+            asinList,
+            totalResults: asinList.length,
+            selection: parsedSelection,
+            domain: parsedDomain,
+            tokensLeft: data.tokensLeft,
+            tokensConsumed: data.tokensConsumed,
+        });
+    } catch (error: unknown) {
+        const err = error as { response?: { status: number; data?: any }; message?: string };
+        if (err.response?.status === 429) {
+            res.status(429).json({ error: 'Keepa APIレート制限。しばらく待ってから再試行してください' });
+            return;
+        }
+        if (err.response?.status === 401 || err.response?.status === 402) {
+            res.status(401).json({ error: 'Keepa API認証エラー。APIキーまたはトークンを確認してください' });
+            return;
+        }
+        res.status(500).json({ error: `Keepaクエリ実行エラー: ${err.message || '不明なエラー'}` });
+    }
+});
+
 app.post('/api/runs', (req, res) => {
     const { asins, originalCsvData } = req.body;
     if (!Array.isArray(asins) || asins.length === 0) {

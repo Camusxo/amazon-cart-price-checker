@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
-import { Upload, FileText, AlertCircle, Loader2, Info, Search as SearchIcon, CheckSquare, Square as SquareIcon, GitCompareArrows, Zap, FileUp, PenLine } from 'lucide-react';
+import { Upload, FileText, AlertCircle, Loader2, Info, Search as SearchIcon, CheckSquare, Square as SquareIcon, GitCompareArrows, Zap, FileUp, PenLine, Filter } from 'lucide-react';
 import axios from 'axios';
 import { OriginalCsvData, OriginalRowData } from '../types';
 
@@ -66,13 +66,21 @@ const ImportPage: React.FC = () => {
     const [originalCsvData, setOriginalCsvData] = useState<OriginalCsvData | null>(null);
 
     // タブ state
-    const [activeTab, setActiveTab] = useState<'csv' | 'text' | 'keepa'>('csv');
+    const [activeTab, setActiveTab] = useState<'csv' | 'text' | 'keepa' | 'query'>('csv');
 
     // テキスト入力用
     const [textInput, setTextInput] = useState('');
     const [textPreview, setTextPreview] = useState<PreviewRow[]>([]);
     const [textStats, setTextStats] = useState({ total: 0, unique: 0, duplicates: 0, empty: 0 });
     const [textAsins, setTextAsins] = useState<string[]>([]);
+
+    // Keepaクエリ用
+    const [queryUrl, setQueryUrl] = useState('');
+    const [queryExecuting, setQueryExecuting] = useState(false);
+    const [queryResults, setQueryResults] = useState<string[]>([]);
+    const [queryTotalResults, setQueryTotalResults] = useState(0);
+    const [queryError, setQueryError] = useState('');
+    const [querySelection, setQuerySelection] = useState<any>(null);
 
     // Keepa検索用
     const [keepaKeyword, setKeepaKeyword] = useState('');
@@ -155,6 +163,40 @@ const ImportPage: React.FC = () => {
         setIsLoading(true);
         try {
             const res = await axios.post('/api/runs', { asins: selected.map(r => r.asin) });
+            const url = autoCompare
+                ? `/results/${res.data.runId}?autoCompare=true`
+                : `/results/${res.data.runId}`;
+            navigate(url);
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { error?: string } } };
+            setError(error.response?.data?.error || '処理開始に失敗しました');
+            setIsLoading(false);
+        }
+    };
+
+    const handleKeepaQuery = async () => {
+        if (!queryUrl.trim()) return;
+        setQueryExecuting(true);
+        setQueryError('');
+        setQueryResults([]);
+        setQuerySelection(null);
+        try {
+            const res = await axios.post('/api/keepa-query', { queryUrl: queryUrl.trim() });
+            setQueryResults(res.data.asinList);
+            setQueryTotalResults(res.data.totalResults);
+            setQuerySelection(res.data.selection);
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { error?: string } } };
+            setQueryError(error.response?.data?.error || 'クエリ実行に失敗しました');
+        }
+        setQueryExecuting(false);
+    };
+
+    const handleStartFromQuery = async (autoCompare: boolean = false) => {
+        if (queryResults.length === 0) return;
+        setIsLoading(true);
+        try {
+            const res = await axios.post('/api/runs', { asins: queryResults });
             const url = autoCompare
                 ? `/results/${res.data.runId}?autoCompare=true`
                 : `/results/${res.data.runId}`;
@@ -441,6 +483,7 @@ const ImportPage: React.FC = () => {
                     { key: 'csv' as const, label: 'CSVアップロード', Icon: FileUp },
                     { key: 'text' as const, label: 'テキスト入力', Icon: PenLine },
                     { key: 'keepa' as const, label: 'Keepa検索', Icon: SearchIcon },
+                    { key: 'query' as const, label: 'Keepaクエリ', Icon: Filter },
                 ].map(tab => (
                     <button key={tab.key} onClick={() => { setActiveTab(tab.key); setError(null); }}
                         className={`flex items-center gap-1.5 px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
@@ -755,6 +798,133 @@ const ImportPage: React.FC = () => {
                                     className="bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 px-5 py-2.5 rounded-lg font-medium text-sm shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
                                     <Zap className="w-4 h-4" /> カート価格のみ（高速）
                                 </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* === Keepaクエリタブ === */}
+            {activeTab === 'query' && (
+                <div className="space-y-4">
+                    {/* 説明 */}
+                    <div className="bg-blue-50 border border-blue-200 text-blue-700 p-4 rounded-lg flex items-start gap-3">
+                        <Info className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                        <div className="text-sm">
+                            <p className="font-medium mb-1">Keepa Product Finder クエリ:</p>
+                            <p className="text-blue-600">
+                                KeepaのProduct FinderクエリURLを貼り付けて、条件に合うASINを一括取得します。
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* URL入力 */}
+                    <div className="space-y-2">
+                        <label className="block text-sm font-medium text-slate-700">クエリURL</label>
+                        <textarea
+                            value={queryUrl}
+                            onChange={e => setQueryUrl(e.target.value)}
+                            placeholder="https://api.keepa.com/query?key=...&domain=5&selection=..."
+                            rows={3}
+                            className="w-full px-4 py-3 border border-slate-300 rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:border-transparent outline-none resize-y"
+                        />
+                        <button
+                            onClick={handleKeepaQuery}
+                            disabled={queryExecuting || !queryUrl.trim()}
+                            className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50 flex items-center gap-2"
+                        >
+                            {queryExecuting ? (
+                                <><Loader2 className="w-4 h-4 animate-spin" /> クエリ実行中...</>
+                            ) : (
+                                'クエリ実行'
+                            )}
+                        </button>
+                    </div>
+
+                    {/* エラー表示 */}
+                    {queryError && (
+                        <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">{queryError}</div>
+                    )}
+
+                    {/* 検索条件の表示 */}
+                    {querySelection && (
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                            <h4 className="text-sm font-semibold text-slate-700 mb-2">検索条件</h4>
+                            <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
+                                {querySelection.current_SALES_gte !== undefined && (
+                                    <div>売上ランク: {querySelection.current_SALES_gte}位 〜 {querySelection.current_SALES_lte || '---'}位</div>
+                                )}
+                                {querySelection.current_AMAZON_gte !== undefined && (
+                                    <div>Amazon本体: {querySelection.current_AMAZON_gte === -1 && querySelection.current_AMAZON_lte === -1 ? '販売なし' : `${querySelection.current_AMAZON_gte}円 〜 ${querySelection.current_AMAZON_lte}円`}</div>
+                                )}
+                                {querySelection.current_NEW_gte !== undefined && (
+                                    <div>新品価格: {querySelection.current_NEW_gte.toLocaleString()}円 〜 {(querySelection.current_NEW_lte || 0).toLocaleString()}円</div>
+                                )}
+                                {querySelection.current_COUNT_NEW_gte !== undefined && (
+                                    <div>新品出品者: {querySelection.current_COUNT_NEW_gte}社以上</div>
+                                )}
+                                {querySelection.rootCategory && (
+                                    <div>カテゴリ: {querySelection.rootCategory.join(', ')}</div>
+                                )}
+                                {querySelection.perPage !== undefined && (
+                                    <div>取得上限: {querySelection.perPage.toLocaleString()}件</div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 結果表示 */}
+                    {queryResults.length > 0 && (
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            <div className="px-6 py-4 bg-green-50 border-b border-green-100">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-sm font-bold text-green-800">
+                                        取得結果: {queryTotalResults.toLocaleString()}件のASIN
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div className="p-6 bg-slate-50">
+                                {/* プレビュー: 最初の10件 */}
+                                <h4 className="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
+                                    <FileText className="w-4 h-4" /> プレビュー（最初の10件）
+                                </h4>
+                                <div className="bg-white border rounded-md overflow-hidden mb-4">
+                                    <div className="grid grid-cols-5 gap-2 p-3">
+                                        {queryResults.slice(0, 10).map((asin, i) => (
+                                            <div key={i} className="font-mono text-xs text-slate-700 bg-slate-50 px-2 py-1 rounded text-center">
+                                                {asin}
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {queryResults.length > 10 && (
+                                        <div className="px-3 pb-3 text-xs text-slate-400 text-center">
+                                            ... 他 {(queryResults.length - 10).toLocaleString()} 件
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* 開始ボタン */}
+                                <div className="flex justify-end gap-3">
+                                    <button
+                                        onClick={() => handleStartFromQuery(true)}
+                                        disabled={isLoading}
+                                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isLoading ? (
+                                            <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</>
+                                        ) : (
+                                            <><GitCompareArrows className="w-5 h-5" /> {queryResults.length.toLocaleString()}件で楽天比較開始</>
+                                        )}
+                                    </button>
+                                    <button
+                                        onClick={() => handleStartFromQuery(false)}
+                                        disabled={isLoading}
+                                        className="bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 px-5 py-2.5 rounded-lg font-medium text-sm shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        <Zap className="w-4 h-4" /> カート価格のみ（高速）
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     )}
