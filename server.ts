@@ -941,10 +941,12 @@ app.post('/api/keepa-query', authMiddleware, async (req, res) => {
         }
 
         const asinList: string[] = data.asinList || [];
+        const totalResults: number = data.totalResults || asinList.length;
 
         res.json({
             asinList,
-            totalResults: asinList.length,
+            totalResults,
+            returnedCount: asinList.length,
             selection: parsedSelection,
             domain: parsedDomain,
             tokensLeft: data.tokensLeft,

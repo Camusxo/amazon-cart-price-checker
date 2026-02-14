@@ -185,6 +185,10 @@ const ImportPage: React.FC = () => {
             setQueryResults(res.data.asinList);
             setQueryTotalResults(res.data.totalResults);
             setQuerySelection(res.data.selection);
+            // トークン不足で全件取得できなかった場合の注意
+            if (res.data.totalResults > res.data.returnedCount) {
+                setQueryError(`注意: 合計${res.data.totalResults.toLocaleString()}件中、APIトークンの制限により${res.data.returnedCount.toLocaleString()}件のみ取得されました。トークン回復後に再実行すると追加取得できます。`);
+            }
         } catch (err: unknown) {
             const error = err as { response?: { data?: { error?: string } } };
             setQueryError(error.response?.data?.error || 'クエリ実行に失敗しました');
@@ -879,7 +883,12 @@ const ImportPage: React.FC = () => {
                             <div className="px-6 py-4 bg-green-50 border-b border-green-100">
                                 <div className="flex items-center justify-between">
                                     <span className="text-sm font-bold text-green-800">
-                                        取得結果: {queryTotalResults.toLocaleString()}件のASIN
+                                        取得結果: {queryResults.length.toLocaleString()}件のASIN
+                                        {queryTotalResults > queryResults.length && (
+                                            <span className="text-amber-600 font-normal ml-2">
+                                                （合計マッチ: {queryTotalResults.toLocaleString()}件）
+                                            </span>
+                                        )}
                                     </span>
                                 </div>
                             </div>

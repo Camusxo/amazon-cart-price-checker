@@ -785,8 +785,10 @@ function ProductRow({ item, onPreview, compareId, onToggleFavorite, isConfirmed,
                     <div className="font-mono text-[11px] font-bold text-emerald-700 mt-0.5">JAN: {item.janCode}</div>
                 )}
                 {item.monthlySold !== null && item.monthlySold > 0 && (
-                    <div className="mt-1 px-1.5 py-0.5 bg-blue-50 text-blue-700 text-[9px] font-medium rounded inline-block">
-                        月{item.monthlySold}個
+                    <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-[11px] font-bold rounded-md border border-blue-200">
+                        <span className="text-blue-500 text-[9px]">月間</span>
+                        <span className="text-sm">{item.monthlySold}</span>
+                        <span className="text-blue-500 text-[9px]">個</span>
                     </div>
                 )}
                 {item.status === 'PENDING' && (
