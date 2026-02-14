@@ -1127,6 +1127,11 @@ app.post('/api/keepa-query', authMiddleware, async (req, res) => {
                 break;
             }
 
+            // トークン残量が尽きた場合はここまでの取得分で終了
+            if (tokensLeft <= 0) {
+                break;
+            }
+
             page++;
 
             // ページ間に少し待機（レート制限対策）
@@ -1150,6 +1155,24 @@ app.post('/api/keepa-query', authMiddleware, async (req, res) => {
         });
     } catch (error: unknown) {
         const err = error as { response?: { status: number; data?: any }; message?: string };
+
+        // 部分結果がある場合はトークン枯渇等でもそこまでの取得分を返却
+        if (allAsinList.length > 0) {
+            const uniqueAsins = [...new Set(allAsinList)];
+            res.json({
+                asinList: uniqueAsins,
+                totalResults,
+                returnedCount: uniqueAsins.length,
+                pagesRetrieved: page + 1,
+                selection: parsedSelection,
+                domain: parsedDomain,
+                tokensLeft,
+                tokensConsumed: totalTokensConsumed,
+                warning: 'トークン不足のため途中までの結果を返却しています',
+            });
+            return;
+        }
+
         if (err.response?.status === 429) {
             res.status(429).json({ error: 'Keepa APIレート制限。しばらく待ってから再試行してください' });
             return;
