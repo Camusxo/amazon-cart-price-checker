@@ -7,6 +7,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import pg from 'pg';
+const { Pool } = pg;
 
 // --- 型定義 ---
 
@@ -101,6 +103,14 @@ const RAKUTEN_ACCESS_KEY = process.env.RAKUTEN_ACCESS_KEY;
 const JWT_SECRET = process.env.JWT_SECRET || 'price-checker-secret-key-change-in-production';
 const ADMIN_ID = process.env.ADMIN_ID || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+const DATABASE_URL = process.env.DATABASE_URL;
+
+// PostgreSQL接続プール
+const pool = DATABASE_URL ? new Pool({
+    connectionString: DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+    max: 5,
+}) : null;
 
 // --- 認証関連 ---
 type UserRole = 'admin' | 'member';
@@ -116,16 +126,128 @@ interface User {
 // インメモリユーザーストア
 const users: Record<string, User> = {};
 
+// テーブル自動作成関数
+const initDatabase = async () => {
+    if (!pool) return;
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id VARCHAR(100) PRIMARY KEY,
+                username VARCHAR(100) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                role VARCHAR(20) DEFAULT 'member',
+                created_at BIGINT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS search_history (
+                id UUID PRIMARY KEY,
+                user_id VARCHAR(100) NOT NULL,
+                type VARCHAR(20) NOT NULL,
+                created_at BIGINT NOT NULL,
+                asin_count INTEGER NOT NULL,
+                method VARCHAR(50),
+                query_url TEXT,
+                is_running BOOLEAN DEFAULT false,
+                stats JSONB,
+                items JSONB,
+                original_csv_data JSONB
+            );
+            CREATE TABLE IF NOT EXISTS comparison_history (
+                id UUID PRIMARY KEY,
+                run_id UUID NOT NULL,
+                user_id VARCHAR(100) NOT NULL,
+                created_at BIGINT NOT NULL,
+                is_running BOOLEAN DEFAULT false,
+                stats JSONB,
+                items JSONB
+            );
+            CREATE INDEX IF NOT EXISTS idx_search_history_user ON search_history(user_id);
+            CREATE INDEX IF NOT EXISTS idx_comparison_history_user ON comparison_history(user_id);
+        `);
+        console.log('PostgreSQL: テーブル初期化完了');
+    } catch (err) {
+        console.error('PostgreSQL: テーブル初期化エラー:', err);
+    }
+};
+
+// ユーザーをDBに保存
+const saveUserToDB = async (user: User) => {
+    if (!pool) return;
+    try {
+        await pool.query(
+            `INSERT INTO users (id, username, password_hash, role, created_at)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (id) DO UPDATE SET username=$2, password_hash=$3, role=$4`,
+            [user.id, user.username, user.passwordHash, user.role, user.createdAt]
+        );
+    } catch (err) { console.error('DB: ユーザー保存エラー', err); }
+};
+
+// DBからユーザーを読み込み
+const loadUsersFromDB = async () => {
+    if (!pool) return;
+    try {
+        const result = await pool.query('SELECT * FROM users');
+        for (const row of result.rows) {
+            users[row.id] = {
+                id: row.id,
+                username: row.username,
+                passwordHash: row.password_hash,
+                role: row.role as UserRole,
+                createdAt: Number(row.created_at),
+            };
+        }
+        console.log(`DB: ${result.rows.length}件のユーザーを読み込み`);
+    } catch (err) { console.error('DB: ユーザー読み込みエラー', err); }
+};
+
+// 検索実行をDBに保存
+const saveRunToDB = async (run: RunSession, userId: string) => {
+    if (!pool) return;
+    try {
+        await pool.query(
+            `INSERT INTO search_history (id, user_id, type, created_at, asin_count, stats, items, original_csv_data, is_running)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             ON CONFLICT (id) DO UPDATE SET stats=$6, items=$7, is_running=$9`,
+            [run.id, userId, 'run', run.createdAt, run.stats.total,
+             JSON.stringify(run.stats), JSON.stringify(run.items),
+             run.originalCsvData ? JSON.stringify(run.originalCsvData) : null,
+             run.isRunning]
+        );
+    } catch (err) { console.error('DB: 検索結果保存エラー', err); }
+};
+
+// 比較結果をDBに保存
+const saveComparisonToDB = async (session: ComparisonSession, userId: string) => {
+    if (!pool) return;
+    try {
+        await pool.query(
+            `INSERT INTO comparison_history (id, run_id, user_id, created_at, stats, items, is_running)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (id) DO UPDATE SET stats=$5, items=$6, is_running=$7`,
+            [session.id, session.runId, userId, session.createdAt,
+             JSON.stringify(session.stats), JSON.stringify(session.items),
+             session.isRunning]
+        );
+    } catch (err) { console.error('DB: 比較結果保存エラー', err); }
+};
+
 // 管理者アカウント初期化
 const initAdmin = async () => {
-    const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
-    users['admin'] = {
-        id: 'admin',
-        username: ADMIN_ID,
-        passwordHash: hash,
-        role: 'admin',
-        createdAt: Date.now(),
-    };
+    await initDatabase();
+    await loadUsersFromDB();
+
+    // DBにadminがない場合のみ作成
+    if (!users['admin']) {
+        const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+        users['admin'] = {
+            id: 'admin',
+            username: ADMIN_ID,
+            passwordHash: hash,
+            role: 'admin',
+            createdAt: Date.now(),
+        };
+        await saveUserToDB(users['admin']);
+    }
     console.log(`管理者アカウント初期化: ${ADMIN_ID}`);
 };
 initAdmin();
@@ -428,6 +550,11 @@ const processQueue = async (runId: string): Promise<void> => {
         run.isRunning = false;
         run.stats.endTime = Date.now();
         log(runId, '処理が完了しました。');
+
+        // 完了時にDBへ保存
+        const runUserId = (runs[runId] as any)._userId;
+        if (runUserId) saveRunToDB(run, runUserId);
+
         return;
     }
 
@@ -628,6 +755,11 @@ const processComparisonQueue = async (compareId: string): Promise<void> => {
     const pendingItems = session.items.filter(i => i.status === 'PENDING');
     if (pendingItems.length === 0) {
         session.isRunning = false;
+
+        // 完了時にDBへ保存
+        const compareUserId = (comparisons[session.id] as any)._userId;
+        if (compareUserId) saveComparisonToDB(session, compareUserId);
+
         return;
     }
 
@@ -668,12 +800,12 @@ const processComparisonQueue = async (compareId: string): Promise<void> => {
                 similarityScore: r.score,
             }));
 
-            // ベストマッチ（既存ロジック - 0.7以上でMATCHED）
+            // ベストマッチ（0.8以上でMATCHED）
             const bestMatch = scoredResults[0] || null;
             const bestScore = bestMatch?.score || 0;
 
-            // 類似度閾値（0.7以上でマッチ判定）
-            if (bestMatch && bestScore >= 0.7) {
+            // 類似度閾値（0.8以上でマッチ判定 — 精度重視）
+            if (bestMatch && bestScore >= 0.8) {
                 item.status = 'MATCHED';
                 item.rakutenTitle = bestMatch.itemName;
                 item.rakutenPrice = bestMatch.itemPrice;
@@ -727,6 +859,10 @@ const processComparisonQueue = async (compareId: string): Promise<void> => {
     }
 
     session.isRunning = false;
+
+    // 完了時にDBへ保存
+    const compareUserId = (comparisons[session.id] as any)._userId;
+    if (compareUserId) saveComparisonToDB(session, compareUserId);
 };
 
 // --- APIルート ---
@@ -789,11 +925,12 @@ app.post('/api/admin/users', authMiddleware, adminOnly, async (req, res) => {
     const hash = await bcrypt.hash(password, 10);
     const id = `user_${Date.now()}`;
     users[id] = { id, username, passwordHash: hash, role: validRole, createdAt: Date.now() };
+    await saveUserToDB(users[id]);
     res.json({ id, username, role: validRole });
 });
 
 // 管理者: ユーザー削除
-app.delete('/api/admin/users/:userId', authMiddleware, adminOnly, (req, res) => {
+app.delete('/api/admin/users/:userId', authMiddleware, adminOnly, async (req, res) => {
     const { userId } = req.params;
     if (userId === 'admin') {
         res.status(400).json({ error: '管理者アカウントは削除できません' });
@@ -804,6 +941,12 @@ app.delete('/api/admin/users/:userId', authMiddleware, adminOnly, (req, res) => 
         return;
     }
     delete users[userId];
+    // DBからも削除
+    if (pool) {
+        try {
+            await pool.query('DELETE FROM users WHERE id=$1', [userId]);
+        } catch (err) { console.error('DB: ユーザー削除エラー', err); }
+    }
     res.json({ ok: true });
 });
 
@@ -818,6 +961,7 @@ app.patch('/api/admin/users/:userId/password', authMiddleware, adminOnly, async 
     const user = users[userId];
     if (!user) { res.status(404).json({ error: 'ユーザーが見つかりません' }); return; }
     user.passwordHash = await bcrypt.hash(password, 10);
+    await saveUserToDB(user);
     res.json({ ok: true });
 });
 
@@ -1006,6 +1150,9 @@ app.post('/api/runs', (req, res) => {
         originalCsvData: originalCsvData || undefined,
     };
 
+    // userIdを記録
+    (runs[runId] as any)._userId = (req as any).user?.userId || 'unknown';
+
     const sortedIds = Object.keys(runs).sort((a, b) => runs[b].createdAt - runs[a].createdAt);
     if (sortedIds.length > 5) {
         delete runs[sortedIds[sortedIds.length - 1]];
@@ -1016,23 +1163,42 @@ app.post('/api/runs', (req, res) => {
     res.json({ runId });
 });
 
-app.get('/api/runs/:runId', (req, res) => {
+app.get('/api/runs/:runId', async (req, res) => {
     const { runId } = req.params;
     const run = runs[runId];
-    if (!run) {
-        res.status(404).json({ error: '実行セッションが見つかりません' });
+    if (run) {
+        res.json({
+            id: run.id,
+            createdAt: run.createdAt,
+            items: run.items,
+            logs: run.logs,
+            isRunning: run.isRunning,
+            stats: run.stats,
+            originalCsvData: run.originalCsvData || null,
+        });
         return;
     }
 
-    res.json({
-        id: run.id,
-        createdAt: run.createdAt,
-        items: run.items,
-        logs: run.logs,
-        isRunning: run.isRunning,
-        stats: run.stats,
-        originalCsvData: run.originalCsvData || null,
-    });
+    // メモリにない場合はDBから読み込み
+    if (pool) {
+        try {
+            const result = await pool.query('SELECT * FROM search_history WHERE id=$1', [runId]);
+            if (result.rows.length > 0) {
+                const row = result.rows[0];
+                res.json({
+                    id: row.id,
+                    createdAt: Number(row.created_at),
+                    items: row.items || [],
+                    logs: [],
+                    isRunning: false,
+                    stats: row.stats || {},
+                    originalCsvData: row.original_csv_data || null,
+                });
+                return;
+            }
+        } catch (err) { console.error('DB読み込みエラー', err); }
+    }
+    res.status(404).json({ error: '実行セッションが見つかりません' });
 });
 
 app.post('/api/runs/:runId/retry-failed', (req, res) => {
@@ -1077,16 +1243,91 @@ app.post('/api/runs/:runId/retry-failed', (req, res) => {
     res.json({ message: `${failedItems.length}件のアイテムをリトライ中` });
 });
 
-app.get('/api/history', (_req, res) => {
-    const history = Object.values(runs)
-        .sort((a, b) => b.createdAt - a.createdAt)
+app.get('/api/history', async (req, res) => {
+    const userId = (req as any).user?.userId;
+
+    // メモリ上のアクティブなrunを含める
+    const memoryRuns = Object.values(runs)
+        .filter(r => !userId || (r as any)._userId === userId || !pool)
         .map(r => ({
             id: r.id,
+            type: 'run' as const,
             createdAt: r.createdAt,
-            total: r.stats.total,
-            processed: r.stats.processed
+            asinCount: r.stats.total,
+            processed: r.stats.processed,
+            success: r.stats.success,
+            failed: r.stats.failed,
+            isRunning: r.isRunning,
         }));
-    res.json(history);
+
+    // メモリ上のアクティブなcomparisonを含める
+    const memoryComparisons = Object.values(comparisons)
+        .filter(c => !userId || (c as any)._userId === userId || !pool)
+        .map(c => ({
+            id: c.id,
+            type: 'comparison' as const,
+            createdAt: c.createdAt,
+            runId: c.runId,
+            asinCount: c.stats.total,
+            matched: c.stats.matched,
+            profitable: c.stats.profitable,
+            isRunning: c.isRunning,
+        }));
+
+    // DBからの履歴
+    let dbRuns: any[] = [];
+    let dbComparisons: any[] = [];
+    if (pool && userId) {
+        try {
+            const runsResult = await pool.query(
+                'SELECT id, created_at, asin_count, stats, is_running FROM search_history WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100',
+                [userId]
+            );
+            dbRuns = runsResult.rows
+                .filter(r => !runs[r.id]) // メモリにあるものは除外
+                .map(r => {
+                    const stats = r.stats || {};
+                    return {
+                        id: r.id,
+                        type: 'run' as const,
+                        createdAt: Number(r.created_at),
+                        asinCount: r.asin_count,
+                        processed: stats.processed || r.asin_count,
+                        success: stats.success || 0,
+                        failed: stats.failed || 0,
+                        isRunning: false,
+                        fromDB: true,
+                    };
+                });
+
+            const compResult = await pool.query(
+                'SELECT id, run_id, created_at, stats, is_running FROM comparison_history WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100',
+                [userId]
+            );
+            dbComparisons = compResult.rows
+                .filter(r => !comparisons[r.id])
+                .map(r => {
+                    const stats = r.stats || {};
+                    return {
+                        id: r.id,
+                        type: 'comparison' as const,
+                        createdAt: Number(r.created_at),
+                        runId: r.run_id,
+                        asinCount: stats.total || 0,
+                        matched: stats.matched || 0,
+                        profitable: stats.profitable || 0,
+                        isRunning: false,
+                        fromDB: true,
+                    };
+                });
+        } catch (err) { console.error('DB: 履歴読み込みエラー', err); }
+    }
+
+    // 全履歴を統合してソート
+    const allHistory = [...memoryRuns, ...memoryComparisons, ...dbRuns, ...dbComparisons]
+        .sort((a, b) => b.createdAt - a.createdAt);
+
+    res.json(allHistory);
 });
 
 // Keepa処理を途中で完了（処理済み結果をそのまま使う）
@@ -1180,6 +1421,9 @@ app.post('/api/compare', (req, res) => {
         },
     };
 
+    // userIdを記録
+    (comparisons[compareId] as any)._userId = (req as any).user?.userId || 'unknown';
+
     // 古い比較セッションを削除（最大5件保持）
     const sortedIds = Object.keys(comparisons).sort((a, b) => comparisons[b].createdAt - comparisons[a].createdAt);
     if (sortedIds.length > 5) {
@@ -1241,6 +1485,9 @@ app.post('/api/compare-now', (req, res) => {
         stats: { total: comparisonItems.length, processed: 0, matched: 0, profitable: 0 },
     };
 
+    // userIdを記録
+    (comparisons[compareId] as any)._userId = (req as any).user?.userId || 'unknown';
+
     const sortedIds = Object.keys(comparisons).sort((a, b) => comparisons[b].createdAt - comparisons[a].createdAt);
     if (sortedIds.length > 5) { delete comparisons[sortedIds[sortedIds.length - 1]]; }
 
@@ -1248,14 +1495,33 @@ app.post('/api/compare-now', (req, res) => {
     res.json({ compareId, itemCount: okItems.length });
 });
 
-app.get('/api/compare/:compareId', (req, res) => {
+app.get('/api/compare/:compareId', async (req, res) => {
     const { compareId } = req.params;
     const session = comparisons[compareId];
-    if (!session) {
-        res.status(404).json({ error: '比較セッションが見つかりません' });
+    if (session) {
+        res.json(session);
         return;
     }
-    res.json(session);
+
+    // メモリにない場合はDBから読み込み
+    if (pool) {
+        try {
+            const result = await pool.query('SELECT * FROM comparison_history WHERE id=$1', [compareId]);
+            if (result.rows.length > 0) {
+                const row = result.rows[0];
+                res.json({
+                    id: row.id,
+                    runId: row.run_id,
+                    createdAt: Number(row.created_at),
+                    items: row.items || [],
+                    isRunning: false,
+                    stats: row.stats || {},
+                });
+                return;
+            }
+        } catch (err) { console.error('DB読み込みエラー', err); }
+    }
+    res.status(404).json({ error: '比較セッションが見つかりません' });
 });
 
 app.patch('/api/compare/:compareId/items/:asin/memo', (req, res) => {
