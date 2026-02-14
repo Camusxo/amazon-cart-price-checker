@@ -383,6 +383,7 @@ const RunPage: React.FC = () => {
                             <tr>
                                 <th className="px-6 py-4 font-semibold">ASIN / 商品名</th>
                                 <th className="px-6 py-4 font-semibold">価格</th>
+                                <th className="px-6 py-4 font-semibold">月間販売数</th>
                                 <th className="px-6 py-4 font-semibold">ステータス</th>
                                 <th className="px-6 py-4 font-semibold">詳細</th>
                             </tr>
@@ -390,7 +391,7 @@ const RunPage: React.FC = () => {
                         <tbody className="divide-y divide-slate-100">
                             {filteredItems.length === 0 ? (
                                 <tr>
-                                    <td colSpan={4} className="p-8 text-center text-slate-400">
+                                    <td colSpan={5} className="p-8 text-center text-slate-400">
                                         フィルター条件に一致するアイテムがありません。
                                     </td>
                                 </tr>
@@ -398,11 +399,14 @@ const RunPage: React.FC = () => {
                                 filteredItems.map((item) => (
                                     <tr key={item.asin} className="hover:bg-slate-50 transition-colors">
                                         <td className="px-6 py-4 max-w-md">
-                                            <div className="font-mono font-bold text-slate-700">{item.asin}</div>
+                                            <div className="font-mono text-[11px] font-bold text-indigo-700">{item.asin}</div>
+                                            {item.janCode && (
+                                                <div className="font-mono text-[11px] font-bold text-emerald-700">JAN: {item.janCode}</div>
+                                            )}
                                             {item.title ? (
-                                                <div className="text-slate-600 line-clamp-2" title={item.title}>{item.title}</div>
+                                                <div className="text-slate-600 line-clamp-2 text-sm mt-0.5" title={item.title}>{item.title}</div>
                                             ) : (
-                                                <span className="text-slate-300 italic">タイトルなし</span>
+                                                <span className="text-slate-300 italic text-sm">タイトルなし</span>
                                             )}
                                         </td>
                                         <td className="px-6 py-4">
@@ -411,6 +415,16 @@ const RunPage: React.FC = () => {
                                             </div>
                                             {item.availability && (
                                                 <div className="text-xs text-green-600">{item.availability}</div>
+                                            )}
+                                        </td>
+                                        <td className="px-6 py-4 text-center">
+                                            {item.monthlySold !== null && item.monthlySold > 0 ? (
+                                                <div className="inline-flex items-center px-2.5 py-1 bg-blue-50 text-blue-700 rounded-lg">
+                                                    <span className="text-lg font-bold">{item.monthlySold}</span>
+                                                    <span className="text-xs ml-1">個/月</span>
+                                                </div>
+                                            ) : (
+                                                <span className="text-slate-300 text-xs">---</span>
                                             )}
                                         </td>
                                         <td className="px-6 py-4">
