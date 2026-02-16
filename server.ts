@@ -622,17 +622,27 @@ const processQueue = async (runId: string): Promise<void> => {
                 log(runId, `レート制限。${waitTime / 1000}秒待機中...`);
                 await new Promise(r => setTimeout(r, waitTime));
             } else if (isAuthError) {
-                log(runId, `認証エラー: ${err.message}`);
+                log(runId, `⚠ トークン枯渇: Keepa APIトークンが不足しています。処理を停止します。`);
+                // 現在のバッチを失敗にする
                 asinsToFetch.forEach(asin => {
                     const idx = run.items.findIndex(i => i.asin === asin);
                     if (idx !== -1) {
                         run.items[idx].status = ItemStatus.AUTH_ERROR;
-                        run.items[idx].errorMessage = 'Keepa API認証エラー。APIキーまたはトークン残量を確認してください。';
+                        run.items[idx].errorMessage = 'Keepa APIトークン不足。トークン回復後に「失敗を再実行」で再処理できます。';
                     }
                 });
                 run.stats.processed += asinsToFetch.length;
                 run.stats.failed += asinsToFetch.length;
-                break;
+                // 残りのキューも全て未処理のままにしてキューを停止
+                const remainingCount = run.queue.length;
+                if (remainingCount > 0) {
+                    log(runId, `残り${remainingCount}件は未処理のまま保留。トークン回復後に「失敗を再実行」してください。`);
+                }
+                run.isRunning = false;
+                run.stats.endTime = Date.now();
+                const userId = (runs[runId] as any)?._userId;
+                if (userId) saveRunToDB(run, userId);
+                return; // processQueue を再スケジュールしない
             } else {
                 log(runId, `バッチ処理失敗: ${err.message}`);
                 asinsToFetch.forEach(asin => {
