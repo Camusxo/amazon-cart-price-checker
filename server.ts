@@ -486,14 +486,6 @@ const fetchFromKeepa = async (asins: string[], runId: string): Promise<ProductRe
 
         log(runId, `Keepa API: 残りトークン ${data.tokensLeft}, 消費 ${data.tokensConsumed}`);
 
-        // デバッグ: statsフィールドの確認
-        if (data.products && data.products.length > 0) {
-            const sample = data.products[0];
-            const sampleKeys = Object.keys(sample);
-            log(runId, `[DEBUG] Product keys: ${sampleKeys.join(', ')}`);
-            log(runId, `[DEBUG] stats存在: ${!!sample.stats}, salesRankDrops30(direct): ${(sample as any).salesRankDrops30}, stats.salesRankDrops30: ${sample.stats?.salesRankDrops30}`);
-        }
-
         const results: ProductResult[] = [];
 
         if (data.products) {
@@ -511,7 +503,7 @@ const fetchFromKeepa = async (asins: string[], runId: string): Promise<ProductRe
                     fetchedAt: new Date().toISOString(),
                     status: hasPrice ? ItemStatus.OK : ItemStatus.NO_OFFER,
                     janCode: extractJanCode(product) || null,
-                    monthlySold: product.stats?.salesRankDrops30 ?? null,
+                    monthlySold: (product.stats?.salesRankDrops30 ?? -1) > 0 ? product.stats!.salesRankDrops30! : null,
                 });
             });
         }
@@ -1038,7 +1030,7 @@ app.get('/api/keepa-search', authMiddleware, async (req, res) => {
             currency: domainInfo.currency,
             imageUrl: p.asin ? `https://images-na.ssl-images-amazon.com/images/I/${p.asin}.jpg` : null,
             janCode: extractJanCode(p) || null,
-            monthlySold: p.stats?.salesRankDrops30 ?? null,
+            monthlySold: (p.stats?.salesRankDrops30 ?? -1) > 0 ? p.stats!.salesRankDrops30! : null,
         }));
 
         res.json({
@@ -1700,11 +1692,6 @@ if (process.env.NODE_ENV !== 'development') {
         res.sendFile(path.join(__dirname, 'dist/index.html'));
     });
 }
-
-// バージョン確認用（認証不要）
-app.get('/api/version', (_req, res) => {
-    res.json({ version: 'v2.1.0-stats-fix', deployedAt: new Date().toISOString() });
-});
 
 app.listen(PORT, () => {
     console.log(`サーバー起動: ポート ${PORT}`);
