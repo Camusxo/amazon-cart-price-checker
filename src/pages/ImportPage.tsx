@@ -81,6 +81,8 @@ const ImportPage: React.FC = () => {
     const [queryTotalResults, setQueryTotalResults] = useState(0);
     const [queryError, setQueryError] = useState('');
     const [querySelection, setQuerySelection] = useState<any>(null);
+    const [querySelectedAsins, setQuerySelectedAsins] = useState<Set<string>>(new Set());
+    const [querySelectCount, setQuerySelectCount] = useState('');
 
     // Keepa検索用
     const [keepaKeyword, setKeepaKeyword] = useState('');
@@ -180,11 +182,16 @@ const ImportPage: React.FC = () => {
         setQueryError('');
         setQueryResults([]);
         setQuerySelection(null);
+        setQuerySelectedAsins(new Set());
+        setQuerySelectCount('');
         try {
             const res = await axios.post('/api/keepa-query', { queryUrl: queryUrl.trim() });
-            setQueryResults(res.data.asinList);
+            const asins: string[] = res.data.asinList;
+            setQueryResults(asins);
             setQueryTotalResults(res.data.totalResults);
             setQuerySelection(res.data.selection);
+            // デフォルトは全選択
+            setQuerySelectedAsins(new Set(asins));
             // トークン不足で全件取得できなかった場合の注意
             if (res.data.totalResults > res.data.returnedCount) {
                 setQueryError(`注意: 合計${res.data.totalResults.toLocaleString()}件中、APIトークンの制限により${res.data.returnedCount.toLocaleString()}件のみ取得されました。トークン回復後に再実行すると追加取得できます。`);
@@ -197,10 +204,11 @@ const ImportPage: React.FC = () => {
     };
 
     const handleStartFromQuery = async (autoCompare: boolean = false) => {
-        if (queryResults.length === 0) return;
+        const selected = queryResults.filter(a => querySelectedAsins.has(a));
+        if (selected.length === 0) return;
         setIsLoading(true);
         try {
-            const res = await axios.post('/api/runs', { asins: queryResults });
+            const res = await axios.post('/api/runs', { asins: selected });
             const url = autoCompare
                 ? `/results/${res.data.runId}?autoCompare=true`
                 : `/results/${res.data.runId}`;
@@ -210,6 +218,21 @@ const ImportPage: React.FC = () => {
             setError(error.response?.data?.error || '処理開始に失敗しました');
             setIsLoading(false);
         }
+    };
+
+    const toggleQueryAsin = (asin: string) => {
+        setQuerySelectedAsins(prev => {
+            const next = new Set(prev);
+            if (next.has(asin)) next.delete(asin); else next.add(asin);
+            return next;
+        });
+    };
+
+    const querySelectAll = () => setQuerySelectedAsins(new Set(queryResults));
+    const queryDeselectAll = () => setQuerySelectedAsins(new Set());
+    const querySelectFirstN = (n: number) => {
+        setQuerySelectedAsins(new Set(queryResults.slice(0, n)));
+        setQuerySelectCount(String(n));
     };
 
     const processFile = (uploadedFile: File) => {
@@ -877,9 +900,10 @@ const ImportPage: React.FC = () => {
                         </div>
                     )}
 
-                    {/* 結果表示 */}
+                    {/* 結果表示 + ASIN選択 */}
                     {queryResults.length > 0 && (
                         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                            {/* ヘッダー */}
                             <div className="px-6 py-4 bg-green-50 border-b border-green-100">
                                 <div className="flex items-center justify-between">
                                     <span className="text-sm font-bold text-green-800">
@@ -890,50 +914,90 @@ const ImportPage: React.FC = () => {
                                             </span>
                                         )}
                                     </span>
+                                    <span className="text-sm font-bold text-indigo-700">
+                                        選択中: {querySelectedAsins.size.toLocaleString()}件
+                                    </span>
                                 </div>
                             </div>
 
-                            <div className="p-6 bg-slate-50">
-                                {/* プレビュー: 最初の10件 */}
-                                <h4 className="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
-                                    <FileText className="w-4 h-4" /> プレビュー（最初の10件）
-                                </h4>
-                                <div className="bg-white border rounded-md overflow-hidden mb-4">
-                                    <div className="grid grid-cols-5 gap-2 p-3">
-                                        {queryResults.slice(0, 10).map((asin, i) => (
-                                            <div key={i} className="font-mono text-xs text-slate-700 bg-slate-50 px-2 py-1 rounded text-center">
-                                                {asin}
-                                            </div>
-                                        ))}
-                                    </div>
-                                    {queryResults.length > 10 && (
-                                        <div className="px-3 pb-3 text-xs text-slate-400 text-center">
-                                            ... 他 {(queryResults.length - 10).toLocaleString()} 件
-                                        </div>
-                                    )}
+                            {/* 選択コントロール */}
+                            <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 space-y-3">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-xs font-medium text-slate-500">一括選択:</span>
+                                    <button onClick={querySelectAll}
+                                        className="px-3 py-1 text-xs font-medium bg-indigo-100 text-indigo-700 rounded-md hover:bg-indigo-200 transition-colors">
+                                        全選択
+                                    </button>
+                                    <button onClick={queryDeselectAll}
+                                        className="px-3 py-1 text-xs font-medium bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 transition-colors">
+                                        全解除
+                                    </button>
+                                    {[50, 100, 200].filter(n => n < queryResults.length).map(n => (
+                                        <button key={n} onClick={() => querySelectFirstN(n)}
+                                            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                                                querySelectedAsins.size === n ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                            }`}>
+                                            先頭{n}件
+                                        </button>
+                                    ))}
                                 </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-medium text-slate-500">件数指定:</span>
+                                    <input
+                                        type="number" min="1" max={queryResults.length}
+                                        value={querySelectCount}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            setQuerySelectCount(val);
+                                            const n = parseInt(val, 10);
+                                            if (n > 0) setQuerySelectedAsins(new Set(queryResults.slice(0, Math.min(n, queryResults.length))));
+                                        }}
+                                        placeholder={`1〜${queryResults.length}`}
+                                        className="w-28 px-3 py-1 text-xs border border-slate-300 rounded-md focus:ring-1 focus:ring-indigo-400 focus:border-transparent outline-none"
+                                    />
+                                    <span className="text-xs text-slate-400">件を選択</span>
+                                    <span className="ml-auto text-xs text-amber-600">
+                                        推定トークン消費: 約{querySelectedAsins.size}トークン
+                                    </span>
+                                </div>
+                            </div>
 
-                                {/* 開始ボタン */}
-                                <div className="flex justify-end gap-3">
-                                    <button
-                                        onClick={() => handleStartFromQuery(true)}
-                                        disabled={isLoading}
-                                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {isLoading ? (
-                                            <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</>
-                                        ) : (
-                                            <><GitCompareArrows className="w-5 h-5" /> {queryResults.length.toLocaleString()}件で楽天比較開始</>
-                                        )}
-                                    </button>
-                                    <button
-                                        onClick={() => handleStartFromQuery(false)}
-                                        disabled={isLoading}
-                                        className="bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 px-5 py-2.5 rounded-lg font-medium text-sm shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        <Zap className="w-4 h-4" /> カート価格のみ（高速）
-                                    </button>
+                            {/* ASIN一覧（スクロール可能） */}
+                            <div className="max-h-[300px] overflow-y-auto">
+                                <div className="grid grid-cols-4 sm:grid-cols-5 gap-1 p-3">
+                                    {queryResults.map((asin, i) => (
+                                        <button key={i} onClick={() => toggleQueryAsin(asin)}
+                                            className={`font-mono text-xs px-2 py-1.5 rounded text-center transition-colors border ${
+                                                querySelectedAsins.has(asin)
+                                                    ? 'bg-indigo-50 text-indigo-700 border-indigo-300'
+                                                    : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'
+                                            }`}>
+                                            {asin}
+                                        </button>
+                                    ))}
                                 </div>
+                            </div>
+
+                            {/* 開始ボタン */}
+                            <div className="p-4 border-t border-slate-200 flex justify-end gap-3">
+                                <button
+                                    onClick={() => handleStartFromQuery(true)}
+                                    disabled={isLoading || querySelectedAsins.size === 0}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isLoading ? (
+                                        <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</>
+                                    ) : (
+                                        <><GitCompareArrows className="w-5 h-5" /> 選択した{querySelectedAsins.size.toLocaleString()}件で楽天比較開始</>
+                                    )}
+                                </button>
+                                <button
+                                    onClick={() => handleStartFromQuery(false)}
+                                    disabled={isLoading || querySelectedAsins.size === 0}
+                                    className="bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 px-5 py-2.5 rounded-lg font-medium text-sm shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    <Zap className="w-4 h-4" /> カート価格のみ（高速）
+                                </button>
                             </div>
                         </div>
                     )}
