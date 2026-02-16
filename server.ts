@@ -75,7 +75,11 @@ interface KeepaProduct {
     lastUpdate?: number;
     eanList?: string[];          // JANコード（EAN）リスト
     upcList?: string[];          // UPCコードリスト（EAN変換でJAN取得可能）
-    salesRankDrops30?: number;   // 30日間の売上ランク降下数 ≒ 月間販売個数
+    stats?: {                    // stats パラメータ使用時のみ設定される統計情報
+        salesRankDrops30?: number;   // 30日間の売上ランク降下数 ≒ 月間販売個数
+        salesRankDrops90?: number;
+        salesRankDrops180?: number;
+    };
 }
 
 interface KeepaApiResponse {
@@ -499,7 +503,7 @@ const fetchFromKeepa = async (asins: string[], runId: string): Promise<ProductRe
                     fetchedAt: new Date().toISOString(),
                     status: hasPrice ? ItemStatus.OK : ItemStatus.NO_OFFER,
                     janCode: extractJanCode(product) || null,
-                    monthlySold: product.salesRankDrops30 || null,
+                    monthlySold: product.stats?.salesRankDrops30 ?? null,
                 });
             });
         }
@@ -1026,7 +1030,7 @@ app.get('/api/keepa-search', authMiddleware, async (req, res) => {
             currency: domainInfo.currency,
             imageUrl: p.asin ? `https://images-na.ssl-images-amazon.com/images/I/${p.asin}.jpg` : null,
             janCode: extractJanCode(p) || null,
-            monthlySold: p.salesRankDrops30 || null,
+            monthlySold: p.stats?.salesRankDrops30 ?? null,
         }));
 
         res.json({
@@ -1084,16 +1088,16 @@ app.post('/api/keepa-query', authMiddleware, async (req, res) => {
         return;
     }
 
-    try {
-        // 最大5000件取得（1ページ≒100件 → 最大50ページ）
-        const maxResults = req.body.maxResults || 5000;
-        const maxPages = Math.min(req.body.maxPages || 50, 50);
-        let allAsinList: string[] = [];
-        let totalResults = 0;
-        let tokensLeft = 0;
-        let totalTokensConsumed = 0;
-        let page = 0;
+    // catchブロックでも参照するため、try外で宣言
+    const maxResults = req.body.maxResults || 5000;
+    const maxPages = Math.min(req.body.maxPages || 50, 50);
+    let allAsinList: string[] = [];
+    let totalResults = 0;
+    let tokensLeft = 0;
+    let totalTokensConsumed = 0;
+    let page = 0;
 
+    try {
         // 複数ページ取得でより多くの結果を取得
         while (page < maxPages) {
             const response = await axios.get('https://api.keepa.com/query', {
