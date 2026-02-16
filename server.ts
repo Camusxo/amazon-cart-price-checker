@@ -486,6 +486,14 @@ const fetchFromKeepa = async (asins: string[], runId: string): Promise<ProductRe
 
         log(runId, `Keepa API: 残りトークン ${data.tokensLeft}, 消費 ${data.tokensConsumed}`);
 
+        // デバッグ: statsフィールドの確認
+        if (data.products && data.products.length > 0) {
+            const sample = data.products[0];
+            const sampleKeys = Object.keys(sample);
+            log(runId, `[DEBUG] Product keys: ${sampleKeys.join(', ')}`);
+            log(runId, `[DEBUG] stats存在: ${!!sample.stats}, salesRankDrops30(direct): ${(sample as any).salesRankDrops30}, stats.salesRankDrops30: ${sample.stats?.salesRankDrops30}`);
+        }
+
         const results: ProductResult[] = [];
 
         if (data.products) {
