@@ -1701,6 +1701,11 @@ if (process.env.NODE_ENV !== 'development') {
     });
 }
 
+// バージョン確認用（認証不要）
+app.get('/api/version', (_req, res) => {
+    res.json({ version: 'v2.1.0-stats-fix', deployedAt: new Date().toISOString() });
+});
+
 app.listen(PORT, () => {
     console.log(`サーバー起動: ポート ${PORT}`);
     console.log(`Keepa API: (ドメイン: ${KEEPA_DOMAIN}) ${KEEPA_API_KEY ? '✓ 設定済み' : '✗ 未設定'}`);
