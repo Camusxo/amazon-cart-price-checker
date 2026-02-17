@@ -186,7 +186,7 @@ const ComparePage: React.FC = () => {
         setMaxPoints(f.maxPoints || '');
         setFavoriteFilter(f.favoriteFilter || 'all');
         setConfirmedFilter(f.confirmedFilter || 'all');
-        setStatusFilter(f.statusFilter || 'ALL');
+        setStatusFilter(f.statusFilter || 'MATCHED');
         setMinProfitWithPoints(f.minProfitWithPoints || '');
         setMaxProfitWithPoints(f.maxProfitWithPoints || '');
         setMinProfitRateWithPoints(f.minProfitRateWithPoints || '');
@@ -242,6 +242,9 @@ const ComparePage: React.FC = () => {
     const filteredItems = useMemo(() => {
         if (!data) return [];
         return data.items.filter(item => {
+            // 未マッチ商品は常に非表示
+            if (item.status === 'NO_MATCH') return false;
+
             // お気に入りフィルター
             if (showFavoriteOnly && !item.favorite) return false;
             if (favoriteFilter === 'yes' && !item.favorite) return false;
