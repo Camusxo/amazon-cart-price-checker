@@ -72,11 +72,10 @@ const RunPage: React.FC = () => {
         axios.get('/api/keepa-tokens').then(res => setTokenInfo(res.data)).catch(() => {});
     }, []);
 
-    // autoCompare=true の場合、Keepa処理が全件完了してから楽天比較を開始
+    // autoCompare=true の場合、成功件数が1件以上になったら即座に楽天比較を開始（全件完了を待たない）
     useEffect(() => {
         if (autoCompare && !autoCompareTriggered && data && !startingCompare) {
-            // Keepa処理が完了し、成功件数が1件以上の場合に自動開始
-            if (!data.isRunning && data.stats.success >= 1) {
+            if (data.stats.success >= 1) {
                 setAutoCompareTriggered(true);
                 handleStartCompareNow();
             }
