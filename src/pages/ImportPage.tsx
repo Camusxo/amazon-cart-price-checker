@@ -507,8 +507,8 @@ const ImportPage: React.FC = () => {
     return (
         <div className="max-w-2xl mx-auto space-y-8">
             <div className="text-center space-y-2">
-                <h2 className="text-3xl font-bold text-slate-800">ASIN登録</h2>
-                <p className="text-slate-500">Amazon商品のASINを登録して価格チェック・楽天比較を行います。</p>
+                <h2 className="text-3xl font-bold text-slate-800">楽天 × Amazon 価格比較</h2>
+                <p className="text-slate-500">ASINを登録して楽天仕入れ × Amazon販売の利益シミュレーションを行います</p>
             </div>
 
             {/* タブ切替 */}
@@ -643,11 +643,11 @@ const ImportPage: React.FC = () => {
                                     </table>
                                 </div>
 
-                                <div className="mt-6 flex justify-end gap-3">
+                                <div className="mt-6 flex items-center justify-end gap-3">
                                     <button
                                         onClick={() => handleStart(true)}
                                         disabled={isLoading || stats.unique === 0}
-                                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-10 py-3.5 rounded-lg font-bold shadow-md transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-base"
                                     >
                                         {isLoading ? (
                                             <>
@@ -655,16 +655,16 @@ const ImportPage: React.FC = () => {
                                             </>
                                         ) : (
                                             <>
-                                                <GitCompareArrows className="w-5 h-5" /> 楽天比較開始
+                                                <GitCompareArrows className="w-5 h-5" /> 楽天 × Amazon 価格比較を開始
                                             </>
                                         )}
                                     </button>
                                     <button
                                         onClick={() => handleStart(false)}
                                         disabled={isLoading || stats.unique === 0}
-                                        className="bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 px-5 py-2.5 rounded-lg font-medium text-sm shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="text-slate-400 hover:text-slate-600 px-3 py-1.5 text-xs transition-all flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed"
                                     >
-                                        <Zap className="w-4 h-4" /> カート価格のみ（高速）
+                                        <Zap className="w-3 h-3" /> Amazonカート価格のみ
                                     </button>
                                 </div>
                             </div>
@@ -736,14 +736,14 @@ const ImportPage: React.FC = () => {
                                     </table>
                                 </div>
 
-                                <div className="mt-6 flex justify-end gap-3">
+                                <div className="mt-6 flex items-center justify-end gap-3">
                                     <button onClick={() => handleStartFromText(true)} disabled={isLoading || textAsins.length === 0}
-                                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                                        {isLoading ? <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</> : <><GitCompareArrows className="w-5 h-5" /> 楽天比較開始</>}
+                                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-10 py-3.5 rounded-lg font-bold shadow-md transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-base">
+                                        {isLoading ? <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</> : <><GitCompareArrows className="w-5 h-5" /> 楽天 × Amazon 価格比較を開始</>}
                                     </button>
                                     <button onClick={() => handleStartFromText(false)} disabled={isLoading || textAsins.length === 0}
-                                        className="bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 px-5 py-2.5 rounded-lg font-medium text-sm shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                                        <Zap className="w-4 h-4" /> カート価格のみ（高速）
+                                        className="text-slate-400 hover:text-slate-600 px-3 py-1.5 text-xs transition-all flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed">
+                                        <Zap className="w-3 h-3" /> Amazonカート価格のみ
                                     </button>
                                 </div>
                             </div>
@@ -823,14 +823,14 @@ const ImportPage: React.FC = () => {
                                 </table>
                             </div>
 
-                            <div className="p-4 border-t border-slate-200 flex justify-end gap-3">
+                            <div className="p-4 border-t border-slate-200 flex items-center justify-end gap-3">
                                 <button onClick={() => handleStartFromKeepa(true)} disabled={isLoading || keepaResults.filter(r => r.selected).length === 0}
-                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                                    {isLoading ? <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</> : <><GitCompareArrows className="w-5 h-5" /> 選択した{keepaResults.filter(r => r.selected).length}件で楽天比較開始</>}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-10 py-3.5 rounded-lg font-bold shadow-md transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-base">
+                                    {isLoading ? <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</> : <><GitCompareArrows className="w-5 h-5" /> {keepaResults.filter(r => r.selected).length}件で楽天比較開始</>}
                                 </button>
                                 <button onClick={() => handleStartFromKeepa(false)} disabled={isLoading || keepaResults.filter(r => r.selected).length === 0}
-                                    className="bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 px-5 py-2.5 rounded-lg font-medium text-sm shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                                    <Zap className="w-4 h-4" /> カート価格のみ（高速）
+                                    className="text-slate-400 hover:text-slate-600 px-3 py-1.5 text-xs transition-all flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed">
+                                    <Zap className="w-3 h-3" /> Amazonカート価格のみ
                                 </button>
                             </div>
                         </div>
@@ -1016,24 +1016,24 @@ const ImportPage: React.FC = () => {
                             </div>
 
                             {/* 開始ボタン */}
-                            <div className="p-4 border-t border-slate-200 flex justify-end gap-3">
+                            <div className="p-4 border-t border-slate-200 flex items-center justify-end gap-3">
                                 <button
                                     onClick={() => handleStartFromQuery(true)}
                                     disabled={isLoading || querySelectedAsins.size === 0}
-                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-10 py-3.5 rounded-lg font-bold shadow-md transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-base"
                                 >
                                     {isLoading ? (
                                         <><Loader2 className="w-5 h-5 animate-spin" /> 処理開始中...</>
                                     ) : (
-                                        <><GitCompareArrows className="w-5 h-5" /> 選択した{querySelectedAsins.size.toLocaleString()}件で楽天比較開始</>
+                                        <><GitCompareArrows className="w-5 h-5" /> {querySelectedAsins.size.toLocaleString()}件で楽天比較開始</>
                                     )}
                                 </button>
                                 <button
                                     onClick={() => handleStartFromQuery(false)}
                                     disabled={isLoading || querySelectedAsins.size === 0}
-                                    className="bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 px-5 py-2.5 rounded-lg font-medium text-sm shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="text-slate-400 hover:text-slate-600 px-3 py-1.5 text-xs transition-all flex items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed"
                                 >
-                                    <Zap className="w-4 h-4" /> カート価格のみ（高速）
+                                    <Zap className="w-3 h-3" /> Amazonカート価格のみ
                                 </button>
                             </div>
                         </div>
