@@ -14,6 +14,8 @@ import {
     Loader2,
     Square,
     ArrowRightLeft,
+    Copy,
+    Check,
 } from 'lucide-react';
 import { RunSession, ItemStatus, OriginalCsvData } from '../types';
 import { getStatusColor, formatCurrency } from '../lib/utils';
@@ -35,6 +37,7 @@ const RunPage: React.FC = () => {
     const [startingCompare, setStartingCompare] = useState(false);
     const [autoCompareTriggered, setAutoCompareTriggered] = useState(false);
     const [linkedCompareId, setLinkedCompareId] = useState<string | null>(null);
+    const [tokenInfo, setTokenInfo] = useState<{ tokensLeft: number; estimatedAsins: number; refillRate: number } | null>(null);
 
     const fetchData = async () => {
         try {
@@ -63,6 +66,11 @@ const RunPage: React.FC = () => {
             setLinkedCompareId(res.data.compareId || null);
         }).catch(() => {});
     }, [runId, startingCompare]);
+
+    // Keepaトークン残量
+    useEffect(() => {
+        axios.get('/api/keepa-tokens').then(res => setTokenInfo(res.data)).catch(() => {});
+    }, []);
 
     // autoCompare=true の場合、Keepa処理が全件完了してから楽天比較を開始
     useEffect(() => {
@@ -351,6 +359,20 @@ const RunPage: React.FC = () => {
                     </div>
                 </div>
 
+                {/* Keepaトークン残量 */}
+                {tokenInfo && (
+                    <div className="mt-4 flex items-center gap-4 text-xs bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
+                        <span className="text-slate-500">Keepaトークン残量:</span>
+                        <span className={`font-bold ${tokenInfo.tokensLeft < 100 ? 'text-red-600' : tokenInfo.tokensLeft < 500 ? 'text-amber-600' : 'text-green-600'}`}>
+                            {tokenInfo.tokensLeft.toLocaleString()}
+                        </span>
+                        <span className="text-slate-400">|</span>
+                        <span className="text-slate-500">追加検索可能: 約<strong className="text-slate-700">{tokenInfo.estimatedAsins.toLocaleString()}</strong>件</span>
+                        <span className="text-slate-400">|</span>
+                        <span className="text-slate-500">回復速度: <strong className="text-slate-700">{tokenInfo.refillRate}</strong>/分</span>
+                    </div>
+                )}
+
                 <div className="mt-4 border-t pt-4">
                     <button
                         onClick={() => setShowLogs(!showLogs)}
@@ -415,9 +437,13 @@ const RunPage: React.FC = () => {
                                 filteredItems.map((item) => (
                                     <tr key={item.asin} className="hover:bg-slate-50 transition-colors">
                                         <td className="px-6 py-4 max-w-md">
-                                            <div className="font-mono text-[11px] font-bold text-indigo-700">{item.asin}</div>
+                                            <div className="font-mono text-[11px] font-bold text-indigo-700 flex items-center">
+                                                {item.asin}<CopyButton text={item.asin} />
+                                            </div>
                                             {item.janCode && (
-                                                <div className="font-mono text-[11px] font-bold text-emerald-700">JAN: {item.janCode}</div>
+                                                <div className="font-mono text-[11px] font-bold text-emerald-700 flex items-center">
+                                                    JAN: {item.janCode}<CopyButton text={item.janCode} />
+                                                </div>
                                             )}
                                             {item.title ? (
                                                 <div className="text-slate-600 line-clamp-2 text-sm mt-0.5" title={item.title}>{item.title}</div>
@@ -475,5 +501,21 @@ const RunPage: React.FC = () => {
         </div>
     );
 };
+
+function CopyButton({ text }: { text: string }) {
+    const [copied, setCopied] = React.useState(false);
+    const handleCopy = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(text).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        });
+    };
+    return (
+        <button onClick={handleCopy} className="inline-flex items-center ml-1 p-0.5 rounded hover:bg-slate-200 transition-colors" title={`${text} をコピー`}>
+            {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3 text-slate-400 hover:text-slate-600" />}
+        </button>
+    );
+}
 
 export default RunPage;

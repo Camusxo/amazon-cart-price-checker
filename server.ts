@@ -1062,6 +1062,32 @@ app.get('/api/keepa-search', authMiddleware, async (req, res) => {
     }
 });
 
+// --- Keepaトークン残量確認API ---
+app.get('/api/keepa-tokens', authMiddleware, async (_req, res) => {
+    if (!KEEPA_API_KEY) {
+        res.status(500).json({ error: 'KEEPA_API_KEYが設定されていません' });
+        return;
+    }
+    try {
+        const response = await axios.get('https://api.keepa.com/token', {
+            params: { key: KEEPA_API_KEY },
+            timeout: 10000,
+        });
+        const data = response.data;
+        // トークン1つあたり処理可能ASIN数の目安（product APIは100ASINで約2トークン消費）
+        const estimatedAsins = Math.floor((data.tokensLeft || 0) / 2) * 100;
+        res.json({
+            tokensLeft: data.tokensLeft || 0,
+            refillIn: data.refillIn || 0,       // 次回補充までの秒数
+            refillRate: data.refillRate || 0,    // 1分あたりの補充量
+            estimatedAsins,                       // 処理可能ASIN数の目安
+        });
+    } catch (error: unknown) {
+        const err = error as { message?: string };
+        res.status(500).json({ error: `トークン確認エラー: ${err.message}` });
+    }
+});
+
 // --- Keepaクエリ（Product Finder）API ---
 app.post('/api/keepa-query', authMiddleware, async (req, res) => {
     const { queryUrl, selection, domain } = req.body;

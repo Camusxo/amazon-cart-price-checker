@@ -15,6 +15,8 @@ import {
     Play,
     CheckCircle,
     ArrowRightLeft,
+    Copy,
+    Check,
 } from 'lucide-react';
 import { ComparisonSession, ComparisonItem } from '../types';
 import { formatCurrency } from '../lib/utils';
@@ -41,9 +43,12 @@ const ComparePage: React.FC = () => {
     const [minProfitRate, setMinProfitRate] = useState<string>('');
     const [minPrice, setMinPrice] = useState<string>('');
     const [maxPrice, setMaxPrice] = useState<string>('');
-    const [statusFilter, setStatusFilter] = useState<string>('ALL');
+    const [statusFilter, setStatusFilter] = useState<string>('MATCHED');
     const [showFilterPanel, setShowFilterPanel] = useState(false);
     const [showFavoriteOnly, setShowFavoriteOnly] = useState(false);
+
+    // Keepaトークン残量
+    const [tokenInfo, setTokenInfo] = useState<{ tokensLeft: number; estimatedAsins: number; refillRate: number } | null>(null);
 
     // 詳細フィルター
     const [excludeKeyword, setExcludeKeyword] = useState('');
@@ -98,6 +103,11 @@ const ComparePage: React.FC = () => {
         }, 2000);
         return () => clearInterval(interval);
     }, [compareId, data?.isRunning]);
+
+    // Keepaトークン残量を取得
+    useEffect(() => {
+        axios.get('/api/keepa-tokens').then(res => setTokenInfo(res.data)).catch(() => {});
+    }, []);
 
     const handleRefresh = async () => {
         if (!compareId) return;
@@ -438,6 +448,20 @@ const ComparePage: React.FC = () => {
                     <span>{progress}%</span>
                 </div>
 
+                {/* Keepaトークン残量 */}
+                {tokenInfo && (
+                    <div className="mt-3 flex items-center gap-4 text-xs bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
+                        <span className="text-slate-500">Keepaトークン残量:</span>
+                        <span className={`font-bold ${tokenInfo.tokensLeft < 100 ? 'text-red-600' : tokenInfo.tokensLeft < 500 ? 'text-amber-600' : 'text-green-600'}`}>
+                            {tokenInfo.tokensLeft.toLocaleString()}
+                        </span>
+                        <span className="text-slate-400">|</span>
+                        <span className="text-slate-500">追加検索可能: 約<strong className="text-slate-700">{tokenInfo.estimatedAsins.toLocaleString()}</strong>件</span>
+                        <span className="text-slate-400">|</span>
+                        <span className="text-slate-500">回復速度: <strong className="text-slate-700">{tokenInfo.refillRate}</strong>/分</span>
+                    </div>
+                )}
+
                 {/* 統計カード */}
                 <div className="grid grid-cols-4 gap-2 mt-4">
                     <StatCard label="合計" value={data.stats.total} color="slate" />
@@ -745,6 +769,23 @@ function SortHeader({ label, sortKey, currentKey, dir, onClick, isLast = false }
     );
 }
 
+// ===== コピーボタン =====
+function CopyButton({ text }: { text: string }) {
+    const [copied, setCopied] = React.useState(false);
+    const handleCopy = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(text).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        });
+    };
+    return (
+        <button onClick={handleCopy} className="inline-flex items-center ml-1 p-0.5 rounded hover:bg-slate-200 transition-colors" title={`${text} をコピー`}>
+            {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3 text-slate-400 hover:text-slate-600" />}
+        </button>
+    );
+}
+
 // ===== PoiPoi風 商品行 =====
 function ProductRow({ item, onPreview, compareId, onToggleFavorite, isConfirmed, onToggleConfirmed }: { item: ComparisonItem; onPreview: () => void; compareId: string; onToggleFavorite: () => void; isConfirmed: boolean; onToggleConfirmed: () => void }) {
     const isMatched = item.status === 'MATCHED';
@@ -788,9 +829,13 @@ function ProductRow({ item, onPreview, compareId, onToggleFavorite, isConfirmed,
 
             {/* ASIN */}
             <td className="px-3 py-3 align-top border-r border-slate-200">
-                <div className="font-mono text-[11px] font-bold text-indigo-700">ASIN: {item.asin}</div>
+                <div className="font-mono text-[11px] font-bold text-indigo-700 flex items-center">
+                    ASIN: {item.asin}<CopyButton text={item.asin} />
+                </div>
                 {item.janCode && (
-                    <div className="font-mono text-[11px] font-bold text-emerald-700 mt-0.5">JAN: {item.janCode}</div>
+                    <div className="font-mono text-[11px] font-bold text-emerald-700 mt-0.5 flex items-center">
+                        JAN: {item.janCode}<CopyButton text={item.janCode} />
+                    </div>
                 )}
                 {item.monthlySold !== null && item.monthlySold > 0 && (
                     <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-[11px] font-bold rounded-md border border-blue-200">
