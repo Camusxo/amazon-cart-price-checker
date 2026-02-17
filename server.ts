@@ -51,6 +51,7 @@ interface OriginalCsvData {
 
 interface RunSession {
     id: string;
+    userId: string;
     createdAt: number;
     items: ProductResult[];
     logs: string[];
@@ -104,6 +105,11 @@ const KEEPA_DOMAIN = Number(process.env.KEEPA_DOMAIN || 5);
 const CACHE_TTL = Number(process.env.CACHE_TTL_SECONDS || 3600);
 const RAKUTEN_APP_ID = process.env.RAKUTEN_APP_ID;
 const RAKUTEN_ACCESS_KEY = process.env.RAKUTEN_ACCESS_KEY;
+// 複数楽天アプリID対応（カンマ区切り）: 各IDごとに独立したレート制限 → 並列で5倍速
+const RAKUTEN_APP_IDS: string[] = process.env.RAKUTEN_APP_IDS
+    ? process.env.RAKUTEN_APP_IDS.split(',').map(id => id.trim()).filter(id => id.length > 0)
+    : (RAKUTEN_APP_ID ? [RAKUTEN_APP_ID] : []);
+let rakutenAppIdIndex = 0;
 const JWT_SECRET = process.env.JWT_SECRET || 'price-checker-secret-key-change-in-production';
 const ADMIN_ID = process.env.ADMIN_ID || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
@@ -119,12 +125,17 @@ const pool = DATABASE_URL ? new Pool({
 // --- 認証関連 ---
 type UserRole = 'admin' | 'member';
 
+interface UserSettings {
+    keepaApiKey?: string;
+}
+
 interface User {
     id: string;
     username: string;
     passwordHash: string;
     role: UserRole;
     createdAt: number;
+    settings: UserSettings;
 }
 
 // インメモリユーザーストア
@@ -140,8 +151,10 @@ const initDatabase = async () => {
                 username VARCHAR(100) UNIQUE NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
                 role VARCHAR(20) DEFAULT 'member',
-                created_at BIGINT NOT NULL
+                created_at BIGINT NOT NULL,
+                settings JSONB DEFAULT '{}'
             );
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS settings JSONB DEFAULT '{}';
             CREATE TABLE IF NOT EXISTS search_history (
                 id UUID PRIMARY KEY,
                 user_id VARCHAR(100) NOT NULL,
@@ -178,10 +191,10 @@ const saveUserToDB = async (user: User) => {
     if (!pool) return;
     try {
         await pool.query(
-            `INSERT INTO users (id, username, password_hash, role, created_at)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (id) DO UPDATE SET username=$2, password_hash=$3, role=$4`,
-            [user.id, user.username, user.passwordHash, user.role, user.createdAt]
+            `INSERT INTO users (id, username, password_hash, role, created_at, settings)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (id) DO UPDATE SET username=$2, password_hash=$3, role=$4, settings=$6`,
+            [user.id, user.username, user.passwordHash, user.role, user.createdAt, JSON.stringify(user.settings || {})]
         );
     } catch (err) { console.error('DB: ユーザー保存エラー', err); }
 };
@@ -198,6 +211,7 @@ const loadUsersFromDB = async () => {
                 passwordHash: row.password_hash,
                 role: row.role as UserRole,
                 createdAt: Number(row.created_at),
+                settings: row.settings || {},
             };
         }
         console.log(`DB: ${result.rows.length}件のユーザーを読み込み`);
@@ -249,6 +263,7 @@ const initAdmin = async () => {
             passwordHash: hash,
             role: 'admin',
             createdAt: Date.now(),
+            settings: {},
         };
         await saveUserToDB(users['admin']);
     }
@@ -352,6 +367,7 @@ interface ComparisonItem {
 interface ComparisonSession {
     id: string;
     runId: string;
+    userId: string;
     createdAt: number;
     items: ComparisonItem[];
     isRunning: boolean;
@@ -454,8 +470,9 @@ const extractJanCode = (product: KeepaProduct): string | null => {
 
 // --- Keepa API ロジック ---
 
-const fetchFromKeepa = async (asins: string[], runId: string): Promise<ProductResult[]> => {
-    if (!KEEPA_API_KEY) {
+const fetchFromKeepa = async (asins: string[], runId: string, apiKey?: string): Promise<ProductResult[]> => {
+    const effectiveKey = apiKey || KEEPA_API_KEY;
+    if (!effectiveKey) {
         throw new Error("KEEPA_API_KEY が設定されていません。.envファイルを確認してください。");
     }
 
@@ -464,7 +481,7 @@ const fetchFromKeepa = async (asins: string[], runId: string): Promise<ProductRe
     try {
         const response = await axios.get<KeepaApiResponse>('https://api.keepa.com/product', {
             params: {
-                key: KEEPA_API_KEY,
+                key: effectiveKey,
                 domain: KEEPA_DOMAIN,
                 asin: asins.join(','),
                 stats: 30,
@@ -556,8 +573,7 @@ const processQueue = async (runId: string): Promise<void> => {
         log(runId, '処理が完了しました。');
 
         // 完了時にDBへ保存
-        const runUserId = (runs[runId] as any)._userId;
-        if (runUserId) saveRunToDB(run, runUserId);
+        if (run.userId) saveRunToDB(run, run.userId);
 
         return;
     }
@@ -591,10 +607,13 @@ const processQueue = async (runId: string): Promise<void> => {
     const maxAttempts = 3;
     let success = false;
 
+    // ユーザーのKeepa APIキーを解決（ユーザーキー優先、なければサーバーキー）
+    const userKeepaKey = run.userId && users[run.userId]?.settings?.keepaApiKey || undefined;
+
     while (attempts < maxAttempts && !success) {
         try {
-            log(runId, `${asinsToFetch.length}件のアイテムを取得中...（試行 ${attempts + 1}）`);
-            const fetchedItems = await fetchFromKeepa(asinsToFetch, runId);
+            log(runId, `${asinsToFetch.length}件のアイテムを取得中...（試行 ${attempts + 1}）${userKeepaKey ? ' [ユーザーキー]' : ' [サーバーキー]'}`);
+            const fetchedItems = await fetchFromKeepa(asinsToFetch, runId, userKeepaKey);
 
             fetchedItems.forEach(item => {
                 const idx = run.items.findIndex(i => i.asin === item.asin);
@@ -640,8 +659,7 @@ const processQueue = async (runId: string): Promise<void> => {
                 }
                 run.isRunning = false;
                 run.stats.endTime = Date.now();
-                const userId = (runs[runId] as any)?._userId;
-                if (userId) saveRunToDB(run, userId);
+                if (run.userId) saveRunToDB(run, run.userId);
                 return; // processQueue を再スケジュールしない
             } else {
                 log(runId, `バッチ処理失敗: ${err.message}`);
@@ -666,10 +684,16 @@ const processQueue = async (runId: string): Promise<void> => {
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-const searchRakuten = async (keyword: string): Promise<RakutenProduct[]> => {
-    if (!RAKUTEN_APP_ID) {
-        throw new Error('RAKUTEN_APP_ID が設定されていません。');
-    }
+// ラウンドロビンで次の楽天アプリIDを取得
+const getNextRakutenAppId = (): string => {
+    if (RAKUTEN_APP_IDS.length === 0) throw new Error('RAKUTEN_APP_ID が設定されていません。');
+    const appId = RAKUTEN_APP_IDS[rakutenAppIdIndex % RAKUTEN_APP_IDS.length];
+    rakutenAppIdIndex++;
+    return appId;
+};
+
+const searchRakuten = async (keyword: string, appId?: string): Promise<RakutenProduct[]> => {
+    const effectiveAppId = appId || getNextRakutenAppId();
 
     // 検索キーワードを最適化（長すぎる商品名から主要キーワードを抽出）
     const optimizedKeyword = keyword
@@ -685,7 +709,7 @@ const searchRakuten = async (keyword: string): Promise<RakutenProduct[]> => {
 
     try {
         const params: Record<string, string | number> = {
-            applicationId: RAKUTEN_APP_ID!,
+            applicationId: effectiveAppId,
             keyword: optimizedKeyword,
             hits: 30,
             sort: '+itemPrice',
@@ -777,7 +801,88 @@ const estimateAmazonFee = (price: number): number => {
     return referralFee + fbaFee;
 };
 
-// 比較キュー処理
+// 単一アイテムの楽天比較処理
+const processComparisonItem = async (item: ComparisonItem, session: ComparisonSession, appId: string): Promise<void> => {
+    try {
+        const rakutenResults = await searchRakuten(item.amazonTitle, appId);
+
+        if (rakutenResults.length === 0) {
+            item.status = 'NO_MATCH';
+            item.rakutenTitle = null;
+            item.rakutenPrice = null;
+            item.rakutenCandidates = [];
+            session.stats.processed++;
+            return;
+        }
+
+        const scoredResults = rakutenResults
+            .map(rp => ({
+                ...rp,
+                score: calculateSimilarity(item.amazonTitle, rp.itemName)
+            }))
+            .sort((a, b) => b.score - a.score)
+            .filter(r => r.score >= 0.3)
+            .slice(0, 3);
+
+        item.rakutenCandidates = scoredResults.map(r => ({
+            title: r.itemName,
+            price: r.itemPrice,
+            url: r.itemUrl,
+            shopName: r.shopName,
+            imageUrl: r.imageUrl || '',
+            pointRate: r.pointRate || 1,
+            similarityScore: r.score,
+        }));
+
+        const bestMatch = scoredResults[0] || null;
+        const bestScore = bestMatch?.score || 0;
+
+        if (bestMatch && bestScore >= 0.8) {
+            item.status = 'MATCHED';
+            item.rakutenTitle = bestMatch.itemName;
+            item.rakutenPrice = bestMatch.itemPrice;
+            item.rakutenUrl = bestMatch.itemUrl;
+            item.rakutenShop = bestMatch.shopName;
+            item.rakutenImageUrl = bestMatch.imageUrl;
+            item.rakutenPointRate = bestMatch.pointRate;
+            item.similarityScore = bestScore;
+
+            item.priceDiff = item.amazonPrice - bestMatch.itemPrice;
+            item.priceDiffPercent = Math.round(((item.amazonPrice - bestMatch.itemPrice) / item.amazonPrice) * 100 * 10) / 10;
+
+            item.estimatedFee = estimateAmazonFee(item.amazonPrice);
+            item.estimatedProfit = item.amazonPrice - bestMatch.itemPrice - item.estimatedFee;
+            item.profitRate = Math.round((item.estimatedProfit / item.amazonPrice) * 100 * 10) / 10;
+
+            session.stats.matched++;
+            if (item.estimatedProfit > 0) {
+                session.stats.profitable++;
+            }
+        } else {
+            item.status = 'NO_MATCH';
+            if (bestMatch) {
+                item.rakutenTitle = bestMatch.itemName;
+                item.rakutenPrice = bestMatch.itemPrice;
+                item.rakutenUrl = bestMatch.itemUrl;
+                item.rakutenShop = bestMatch.shopName;
+                item.similarityScore = bestScore;
+            }
+        }
+
+        session.stats.processed++;
+
+    } catch (error: unknown) {
+        const err = error as { message?: string };
+        if (err.message === 'RAKUTEN_THROTTLED') {
+            throw error; // 呼び出し元でリトライ
+        }
+        item.status = 'ERROR';
+        item.errorMessage = err.message || '楽天API検索エラー';
+        session.stats.processed++;
+    }
+};
+
+// 比較キュー処理（複数アプリID並列ワーカー）
 const processComparisonQueue = async (compareId: string): Promise<void> => {
     const session = comparisons[compareId];
     if (!session || !session.isRunning) return;
@@ -785,114 +890,51 @@ const processComparisonQueue = async (compareId: string): Promise<void> => {
     const pendingItems = session.items.filter(i => i.status === 'PENDING');
     if (pendingItems.length === 0) {
         session.isRunning = false;
-
-        // 完了時にDBへ保存
-        const compareUserId = (comparisons[session.id] as any)._userId;
-        if (compareUserId) saveComparisonToDB(session, compareUserId);
-
+        if (session.userId) saveComparisonToDB(session, session.userId);
         return;
     }
 
-    for (const item of pendingItems) {
-        if (!session.isRunning) break;
+    const workerCount = Math.min(RAKUTEN_APP_IDS.length, pendingItems.length);
 
-        try {
-            const rakutenResults = await searchRakuten(item.amazonTitle);
-
-            if (rakutenResults.length === 0) {
-                item.status = 'NO_MATCH';
-                item.rakutenTitle = null;
-                item.rakutenPrice = null;
-                item.rakutenCandidates = [];
-                session.stats.processed++;
-                await delay(1100); // レート制限対応
-                continue;
+    if (workerCount <= 1) {
+        // 単一ワーカー（従来動作）
+        const appId = RAKUTEN_APP_IDS[0] || RAKUTEN_APP_ID || '';
+        for (const item of pendingItems) {
+            if (!session.isRunning) break;
+            try {
+                await processComparisonItem(item, session, appId);
+            } catch {
+                await delay(3000); // THROTTLED時リトライ待ち
+                try { await processComparisonItem(item, session, appId); } catch { /* skip */ }
             }
-
-            // 全結果の類似度を計算してソート
-            const scoredResults = rakutenResults
-                .map(rp => ({
-                    ...rp,
-                    score: calculateSimilarity(item.amazonTitle, rp.itemName)
-                }))
-                .sort((a, b) => b.score - a.score)
-                .filter(r => r.score >= 0.3)  // 類似度30%以上のみ候補
-                .slice(0, 3);  // 上位3件
-
-            // 候補を格納
-            item.rakutenCandidates = scoredResults.map(r => ({
-                title: r.itemName,
-                price: r.itemPrice,
-                url: r.itemUrl,
-                shopName: r.shopName,
-                imageUrl: r.imageUrl || '',
-                pointRate: r.pointRate || 1,
-                similarityScore: r.score,
-            }));
-
-            // ベストマッチ（0.8以上でMATCHED）
-            const bestMatch = scoredResults[0] || null;
-            const bestScore = bestMatch?.score || 0;
-
-            // 類似度閾値（0.8以上でマッチ判定 — 精度重視）
-            if (bestMatch && bestScore >= 0.8) {
-                item.status = 'MATCHED';
-                item.rakutenTitle = bestMatch.itemName;
-                item.rakutenPrice = bestMatch.itemPrice;
-                item.rakutenUrl = bestMatch.itemUrl;
-                item.rakutenShop = bestMatch.shopName;
-                item.rakutenImageUrl = bestMatch.imageUrl;
-                item.rakutenPointRate = bestMatch.pointRate;
-                item.similarityScore = bestScore;
-
-                // 価格差計算
-                item.priceDiff = item.amazonPrice - bestMatch.itemPrice;
-                item.priceDiffPercent = Math.round(((item.amazonPrice - bestMatch.itemPrice) / item.amazonPrice) * 100 * 10) / 10;
-
-                // 利益計算: Amazon販売価格 - 楽天仕入価格 - Amazon手数料
-                item.estimatedFee = estimateAmazonFee(item.amazonPrice);
-                item.estimatedProfit = item.amazonPrice - bestMatch.itemPrice - item.estimatedFee;
-                item.profitRate = Math.round((item.estimatedProfit / item.amazonPrice) * 100 * 10) / 10;
-
-                session.stats.matched++;
-                if (item.estimatedProfit > 0) {
-                    session.stats.profitable++;
-                }
-            } else {
-                item.status = 'NO_MATCH';
-                // 類似度が低くても最安値の楽天商品を参考表示
-                if (bestMatch) {
-                    item.rakutenTitle = bestMatch.itemName;
-                    item.rakutenPrice = bestMatch.itemPrice;
-                    item.rakutenUrl = bestMatch.itemUrl;
-                    item.rakutenShop = bestMatch.shopName;
-                    item.similarityScore = bestScore;
-                }
-            }
-
-            session.stats.processed++;
-
-        } catch (error: unknown) {
-            const err = error as { message?: string };
-            if (err.message === 'RAKUTEN_THROTTLED') {
-                // レート制限時は3秒待って再試行
-                await delay(3000);
-                continue;
-            }
-            item.status = 'ERROR';
-            item.errorMessage = err.message || '楽天API検索エラー';
-            session.stats.processed++;
+            await delay(1100);
         }
+    } else {
+        // 複数アプリID並列ワーカー: アイテムをワーカーに分配
+        const workerQueues: ComparisonItem[][] = Array.from({ length: workerCount }, () => []);
+        pendingItems.forEach((item, idx) => {
+            workerQueues[idx % workerCount].push(item);
+        });
 
-        // 楽天API レート制限: 1リクエスト/秒
-        await delay(1100);
+        const workerPromises = workerQueues.map(async (queue, workerIdx) => {
+            const appId = RAKUTEN_APP_IDS[workerIdx];
+            for (const item of queue) {
+                if (!session.isRunning) break;
+                try {
+                    await processComparisonItem(item, session, appId);
+                } catch {
+                    await delay(3000);
+                    try { await processComparisonItem(item, session, appId); } catch { /* skip */ }
+                }
+                await delay(1100); // 各ワーカーはそれぞれ1req/秒制限
+            }
+        });
+
+        await Promise.all(workerPromises);
     }
 
     session.isRunning = false;
-
-    // 完了時にDBへ保存
-    const compareUserId = (comparisons[session.id] as any)._userId;
-    if (compareUserId) saveComparisonToDB(session, compareUserId);
+    if (session.userId) saveComparisonToDB(session, session.userId);
 };
 
 // --- APIルート ---
@@ -936,6 +978,7 @@ app.get('/api/admin/users', authMiddleware, adminOnly, (_req, res) => {
         username: u.username,
         role: u.role,
         createdAt: u.createdAt,
+        hasKeepaKey: !!u.settings?.keepaApiKey,
     }));
     res.json(userList);
 });
@@ -954,7 +997,7 @@ app.post('/api/admin/users', authMiddleware, adminOnly, async (req, res) => {
     const validRole: UserRole = role === 'admin' ? 'admin' : 'member';
     const hash = await bcrypt.hash(password, 10);
     const id = `user_${Date.now()}`;
-    users[id] = { id, username, passwordHash: hash, role: validRole, createdAt: Date.now() };
+    users[id] = { id, username, passwordHash: hash, role: validRole, createdAt: Date.now(), settings: {} };
     await saveUserToDB(users[id]);
     res.json({ id, username, role: validRole });
 });
@@ -995,6 +1038,70 @@ app.patch('/api/admin/users/:userId/password', authMiddleware, adminOnly, async 
     res.json({ ok: true });
 });
 
+// --- 管理者: ユーザーのKeepa APIキー管理 ---
+
+// キー取得（マスク表示）
+app.get('/api/admin/users/:userId/keepa-key', authMiddleware, adminOnly, (req, res) => {
+    const { userId } = req.params;
+    const user = users[userId];
+    if (!user) { res.status(404).json({ error: 'ユーザーが見つかりません' }); return; }
+    const key = user.settings?.keepaApiKey;
+    res.json({
+        hasKey: !!key,
+        maskedKey: key ? key.slice(0, 4) + '****' + key.slice(-4) : null,
+    });
+});
+
+// キー設定（検証付き）
+app.put('/api/admin/users/:userId/keepa-key', authMiddleware, adminOnly, async (req, res) => {
+    const { userId } = req.params;
+    const { apiKey } = req.body;
+    if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
+        res.status(400).json({ error: '有効なKeepa APIキーを入力してください' });
+        return;
+    }
+    const user = users[userId];
+    if (!user) { res.status(404).json({ error: 'ユーザーが見つかりません' }); return; }
+
+    // キー検証: Keepa token APIで有効性チェック
+    try {
+        const tokenRes = await axios.get('https://api.keepa.com/token', {
+            params: { key: apiKey.trim() },
+            timeout: 10000,
+        });
+        const tokenData = tokenRes.data;
+
+        // キーを保存
+        if (!user.settings) user.settings = {};
+        user.settings.keepaApiKey = apiKey.trim();
+        await saveUserToDB(user);
+
+        res.json({
+            ok: true,
+            tokensLeft: tokenData.tokensLeft || 0,
+            refillRate: tokenData.refillRate || 0,
+        });
+    } catch (error: unknown) {
+        const err = error as { response?: { status: number }; message?: string };
+        if (err.response?.status === 401 || err.response?.status === 402) {
+            res.status(400).json({ error: '無効なKeepa APIキーです' });
+            return;
+        }
+        res.status(500).json({ error: `キー検証エラー: ${err.message}` });
+    }
+});
+
+// キー削除
+app.delete('/api/admin/users/:userId/keepa-key', authMiddleware, adminOnly, async (req, res) => {
+    const { userId } = req.params;
+    const user = users[userId];
+    if (!user) { res.status(404).json({ error: 'ユーザーが見つかりません' }); return; }
+    if (!user.settings) user.settings = {};
+    delete user.settings.keepaApiKey;
+    await saveUserToDB(user);
+    res.json({ ok: true });
+});
+
 // --- 以降のAPIルートに認証を適用 ---
 app.use('/api/runs', authMiddleware);
 app.use('/api/compare', authMiddleware);
@@ -1008,7 +1115,11 @@ app.get('/api/keepa-search', authMiddleware, async (req, res) => {
         res.status(400).json({ error: '検索キーワードが必要です' });
         return;
     }
-    if (!KEEPA_API_KEY) {
+    // ユーザーのKeepa APIキーを優先、なければサーバーキー
+    const userId = (req as any).user?.userId;
+    const userKeepaKey = userId && users[userId]?.settings?.keepaApiKey || undefined;
+    const effectiveKey = userKeepaKey || KEEPA_API_KEY;
+    if (!effectiveKey) {
         res.status(500).json({ error: 'KEEPA_API_KEYが設定されていません' });
         return;
     }
@@ -1016,7 +1127,7 @@ app.get('/api/keepa-search', authMiddleware, async (req, res) => {
     try {
         const response = await axios.get<KeepaApiResponse>('https://api.keepa.com/search', {
             params: {
-                key: KEEPA_API_KEY,
+                key: effectiveKey,
                 domain: KEEPA_DOMAIN,
                 type: 'product',
                 term: keyword.trim(),
@@ -1063,14 +1174,18 @@ app.get('/api/keepa-search', authMiddleware, async (req, res) => {
 });
 
 // --- Keepaトークン残量確認API ---
-app.get('/api/keepa-tokens', authMiddleware, async (_req, res) => {
-    if (!KEEPA_API_KEY) {
+app.get('/api/keepa-tokens', authMiddleware, async (req, res) => {
+    // ユーザーのKeepa APIキーを優先、なければサーバーキー
+    const userId = (req as any).user?.userId;
+    const userKeepaKey = userId && users[userId]?.settings?.keepaApiKey || undefined;
+    const effectiveKey = userKeepaKey || KEEPA_API_KEY;
+    if (!effectiveKey) {
         res.status(500).json({ error: 'KEEPA_API_KEYが設定されていません' });
         return;
     }
     try {
         const response = await axios.get('https://api.keepa.com/token', {
-            params: { key: KEEPA_API_KEY },
+            params: { key: effectiveKey },
             timeout: 10000,
         });
         const data = response.data;
@@ -1081,6 +1196,7 @@ app.get('/api/keepa-tokens', authMiddleware, async (_req, res) => {
             refillIn: data.refillIn || 0,       // 次回補充までの秒数
             refillRate: data.refillRate || 0,    // 1分あたりの補充量
             estimatedAsins,                       // 処理可能ASIN数の目安
+            keySource: userKeepaKey ? 'user' : 'server',
         });
     } catch (error: unknown) {
         const err = error as { message?: string };
@@ -1092,7 +1208,11 @@ app.get('/api/keepa-tokens', authMiddleware, async (_req, res) => {
 app.post('/api/keepa-query', authMiddleware, async (req, res) => {
     const { queryUrl, selection, domain } = req.body;
 
-    if (!KEEPA_API_KEY) {
+    // ユーザーのKeepa APIキーを優先、なければサーバーキー
+    const userId = (req as any).user?.userId;
+    const userKeepaKey = userId && users[userId]?.settings?.keepaApiKey || undefined;
+    const effectiveKeepaKey = userKeepaKey || KEEPA_API_KEY;
+    if (!effectiveKeepaKey) {
         res.status(500).json({ error: 'KEEPA_API_KEYが設定されていません' });
         return;
     }
@@ -1139,7 +1259,7 @@ app.post('/api/keepa-query', authMiddleware, async (req, res) => {
         while (page < maxPages) {
             const response = await axios.get('https://api.keepa.com/query', {
                 params: {
-                    key: KEEPA_API_KEY,
+                    key: effectiveKeepaKey,
                     domain: parsedDomain,
                     selection: JSON.stringify(parsedSelection),
                     page,
@@ -1251,6 +1371,7 @@ app.post('/api/runs', (req, res) => {
 
     runs[runId] = {
         id: runId,
+        userId: (req as any).user?.userId || 'unknown',
         createdAt: Date.now(),
         items: initialItems,
         logs: [`${uniqueAsins.length}件のASINで初期化（Keepa API使用）`],
@@ -1265,9 +1386,6 @@ app.post('/api/runs', (req, res) => {
         },
         originalCsvData: originalCsvData || undefined,
     };
-
-    // userIdを記録
-    (runs[runId] as any)._userId = (req as any).user?.userId || 'unknown';
 
     const sortedIds = Object.keys(runs).sort((a, b) => runs[b].createdAt - runs[a].createdAt);
     if (sortedIds.length > 5) {
@@ -1364,7 +1482,7 @@ app.get('/api/history', async (req, res) => {
 
     // メモリ上のアクティブなrunを含める
     const memoryRuns = Object.values(runs)
-        .filter(r => !userId || (r as any)._userId === userId || !pool)
+        .filter(r => !userId || r.userId === userId || !pool)
         .map(r => ({
             id: r.id,
             type: 'run' as const,
@@ -1378,7 +1496,7 @@ app.get('/api/history', async (req, res) => {
 
     // メモリ上のアクティブなcomparisonを含める
     const memoryComparisons = Object.values(comparisons)
-        .filter(c => !userId || (c as any)._userId === userId || !pool)
+        .filter(c => !userId || c.userId === userId || !pool)
         .map(c => ({
             id: c.id,
             type: 'comparison' as const,
@@ -1462,7 +1580,8 @@ app.post('/api/runs/:runId/stop', (req, res) => {
 app.get('/api/status', (_req, res) => {
     res.json({
         apiConfigured: !!KEEPA_API_KEY,
-        rakutenConfigured: !!RAKUTEN_APP_ID,
+        rakutenConfigured: RAKUTEN_APP_IDS.length > 0,
+        rakutenAppIdCount: RAKUTEN_APP_IDS.length,
         apiType: 'Keepa',
         domain: KEEPA_DOMAIN,
         domainInfo: DOMAIN_CURRENCY_MAP[KEEPA_DOMAIN] || DOMAIN_CURRENCY_MAP[5],
@@ -1484,7 +1603,7 @@ app.post('/api/compare', (req, res) => {
         return;
     }
 
-    if (!RAKUTEN_APP_ID) {
+    if (RAKUTEN_APP_IDS.length === 0) {
         res.status(500).json({ error: 'RAKUTEN_APP_IDが設定されていません' });
         return;
     }
@@ -1526,6 +1645,7 @@ app.post('/api/compare', (req, res) => {
     comparisons[compareId] = {
         id: compareId,
         runId,
+        userId: (req as any).user?.userId || 'unknown',
         createdAt: Date.now(),
         items: comparisonItems,
         isRunning: true,
@@ -1536,9 +1656,6 @@ app.post('/api/compare', (req, res) => {
             profitable: 0,
         },
     };
-
-    // userIdを記録
-    (comparisons[compareId] as any)._userId = (req as any).user?.userId || 'unknown';
 
     // 古い比較セッションを削除（最大5件保持）
     const sortedIds = Object.keys(comparisons).sort((a, b) => comparisons[b].createdAt - comparisons[a].createdAt);
@@ -1557,7 +1674,7 @@ app.post('/api/compare-now', (req, res) => {
     if (!runId) { res.status(400).json({ error: 'runIdが必要です' }); return; }
     const run = runs[runId];
     if (!run) { res.status(404).json({ error: '実行セッションが見つかりません' }); return; }
-    if (!RAKUTEN_APP_ID) { res.status(500).json({ error: 'RAKUTEN_APP_IDが設定されていません' }); return; }
+    if (RAKUTEN_APP_IDS.length === 0) { res.status(500).json({ error: 'RAKUTEN_APP_IDが設定されていません' }); return; }
 
     // 現時点でOKの商品のみ（処理途中でもOK）
     const okItems = run.items.filter(i => i.status === ItemStatus.OK && i.priceAmount && i.title);
@@ -1595,14 +1712,12 @@ app.post('/api/compare-now', (req, res) => {
     comparisons[compareId] = {
         id: compareId,
         runId,
+        userId: (req as any).user?.userId || 'unknown',
         createdAt: Date.now(),
         items: comparisonItems,
         isRunning: true,
         stats: { total: comparisonItems.length, processed: 0, matched: 0, profitable: 0 },
     };
-
-    // userIdを記録
-    (comparisons[compareId] as any)._userId = (req as any).user?.userId || 'unknown';
 
     const sortedIds = Object.keys(comparisons).sort((a, b) => comparisons[b].createdAt - comparisons[a].createdAt);
     if (sortedIds.length > 5) { delete comparisons[sortedIds[sortedIds.length - 1]]; }
@@ -1617,18 +1732,19 @@ app.post('/api/auto-compare', authMiddleware, (req, res) => {
     if (!runId) { res.status(400).json({ error: 'runIdが必要です' }); return; }
     const run = runs[runId];
     if (!run) { res.status(404).json({ error: '実行セッションが見つかりません' }); return; }
-    if (!RAKUTEN_APP_ID) { res.status(500).json({ error: 'RAKUTEN_APP_IDが設定されていません' }); return; }
+    if (RAKUTEN_APP_IDS.length === 0) { res.status(500).json({ error: 'RAKUTEN_APP_IDが設定されていません' }); return; }
 
     const compareId = uuidv4();
+    const compareUserId = (req as any).user?.userId || 'unknown';
     comparisons[compareId] = {
         id: compareId,
         runId,
+        userId: compareUserId,
         createdAt: Date.now(),
         items: [],
         isRunning: true,
         stats: { total: 0, processed: 0, matched: 0, profitable: 0 },
     };
-    (comparisons[compareId] as any)._userId = (req as any).user?.userId || 'unknown';
 
     const sortedIds = Object.keys(comparisons).sort((a, b) => comparisons[b].createdAt - comparisons[a].createdAt);
     if (sortedIds.length > 5) { delete comparisons[sortedIds[sortedIds.length - 1]]; }
@@ -1665,64 +1781,35 @@ app.post('/api/auto-compare', authMiddleware, (req, res) => {
             session.stats.total = session.items.length;
         }
 
-        // PENDINGアイテムの楽天比較を実行
+        // PENDINGアイテムの楽天比較を並列ワーカーで実行
         const pendingItems = session.items.filter(i => i.status === 'PENDING');
-        for (const item of pendingItems) {
-            if (!session.isRunning) break;
-            try {
-                const rakutenResults = await searchRakuten(item.amazonTitle);
-                if (rakutenResults.length === 0) {
-                    item.status = 'NO_MATCH';
-                    session.stats.processed++;
+        if (pendingItems.length > 0) {
+            const workerCount = Math.min(RAKUTEN_APP_IDS.length, pendingItems.length);
+            if (workerCount <= 1) {
+                const appId = RAKUTEN_APP_IDS[0] || RAKUTEN_APP_ID || '';
+                for (const item of pendingItems) {
+                    if (!session.isRunning) break;
+                    try { await processComparisonItem(item, session, appId); } catch { /* skip */ }
                     await delay(1100);
-                    continue;
                 }
-                const scoredResults = rakutenResults
-                    .map(rp => ({ ...rp, score: calculateSimilarity(item.amazonTitle, rp.itemName) }))
-                    .sort((a, b) => b.score - a.score)
-                    .filter(r => r.score >= 0.3)
-                    .slice(0, 3);
-                item.rakutenCandidates = scoredResults.map(r => ({
-                    title: r.itemName, price: r.itemPrice, url: r.itemUrl,
-                    shopName: r.shopName, imageUrl: r.imageUrl || '',
-                    pointRate: r.pointRate || 1, similarityScore: r.score,
+            } else {
+                const workerQueues: ComparisonItem[][] = Array.from({ length: workerCount }, () => []);
+                pendingItems.forEach((item, idx) => { workerQueues[idx % workerCount].push(item); });
+                await Promise.all(workerQueues.map(async (queue, wIdx) => {
+                    const appId = RAKUTEN_APP_IDS[wIdx];
+                    for (const item of queue) {
+                        if (!session.isRunning) break;
+                        try { await processComparisonItem(item, session, appId); } catch { /* skip */ }
+                        await delay(1100);
+                    }
                 }));
-                const bestMatch = scoredResults[0] || null;
-                const bestScore = bestMatch?.score || 0;
-                if (bestMatch && bestScore >= 0.8) {
-                    item.status = 'MATCHED';
-                    item.rakutenTitle = bestMatch.itemName;
-                    item.rakutenPrice = bestMatch.itemPrice;
-                    item.rakutenUrl = bestMatch.itemUrl;
-                    item.rakutenShop = bestMatch.shopName;
-                    item.rakutenImageUrl = bestMatch.imageUrl || null;
-                    item.rakutenPointRate = bestMatch.pointRate || 1;
-                    item.similarityScore = bestScore;
-                    item.priceDiff = bestMatch.itemPrice - item.amazonPrice;
-                    item.priceDiffPercent = Math.round(((bestMatch.itemPrice - item.amazonPrice) / item.amazonPrice) * 100);
-                    const fee = item.estimatedFee;
-                    const pointValue = Math.floor(item.amazonPrice * (item.rakutenPointRate / 100));
-                    item.estimatedProfit = item.amazonPrice - bestMatch.itemPrice - fee;
-                    item.profitRate = Math.round(((item.amazonPrice - bestMatch.itemPrice - fee) / item.amazonPrice) * 100);
-                    if (item.estimatedProfit > 0) session.stats.profitable++;
-                    session.stats.matched++;
-                } else {
-                    item.status = 'NO_MATCH';
-                }
-                session.stats.processed++;
-                await delay(1100);
-            } catch {
-                item.status = 'NO_MATCH';
-                session.stats.processed++;
-                await delay(1100);
             }
         }
 
         // Keepa処理が完了し、全アイテム取り込み済みなら終了
         if (!run.isRunning && newOkItems.length === 0 && pendingItems.length === 0) {
             session.isRunning = false;
-            const compareUserId = (comparisons[session.id] as any)._userId;
-            if (compareUserId) saveComparisonToDB(session, compareUserId);
+            if (session.userId) saveComparisonToDB(session, session.userId);
             clearInterval(watchInterval);
         }
     }, 3000);
@@ -1866,5 +1953,5 @@ if (process.env.NODE_ENV !== 'development') {
 app.listen(PORT, () => {
     console.log(`サーバー起動: ポート ${PORT}`);
     console.log(`Keepa API: (ドメイン: ${KEEPA_DOMAIN}) ${KEEPA_API_KEY ? '✓ 設定済み' : '✗ 未設定'}`);
-    console.log(`楽天API: AppID=${RAKUTEN_APP_ID ? '✓' : '✗'} AccessKey=${RAKUTEN_ACCESS_KEY ? '✓' : '✗'}`);
+    console.log(`楽天API: AppID×${RAKUTEN_APP_IDS.length}個 AccessKey=${RAKUTEN_ACCESS_KEY ? '✓' : '✗'} → ${RAKUTEN_APP_IDS.length}req/秒`);
 });
