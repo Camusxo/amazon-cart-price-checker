@@ -1611,6 +1611,125 @@ app.post('/api/compare-now', (req, res) => {
     res.json({ compareId, itemCount: okItems.length });
 });
 
+// Keepa処理と楽天比較を同時並行で実行（ImportPageから直接ComparePageへ遷移用）
+app.post('/api/auto-compare', authMiddleware, (req, res) => {
+    const { runId } = req.body;
+    if (!runId) { res.status(400).json({ error: 'runIdが必要です' }); return; }
+    const run = runs[runId];
+    if (!run) { res.status(404).json({ error: '実行セッションが見つかりません' }); return; }
+    if (!RAKUTEN_APP_ID) { res.status(500).json({ error: 'RAKUTEN_APP_IDが設定されていません' }); return; }
+
+    const compareId = uuidv4();
+    comparisons[compareId] = {
+        id: compareId,
+        runId,
+        createdAt: Date.now(),
+        items: [],
+        isRunning: true,
+        stats: { total: 0, processed: 0, matched: 0, profitable: 0 },
+    };
+    (comparisons[compareId] as any)._userId = (req as any).user?.userId || 'unknown';
+
+    const sortedIds = Object.keys(comparisons).sort((a, b) => comparisons[b].createdAt - comparisons[a].createdAt);
+    if (sortedIds.length > 5) { delete comparisons[sortedIds[sortedIds.length - 1]]; }
+
+    // バックグラウンドでKeepa完了アイテムを順次取り込んで楽天比較
+    const processedAsins = new Set<string>();
+    const watchInterval = setInterval(async () => {
+        const session = comparisons[compareId];
+        if (!session || !session.isRunning) { clearInterval(watchInterval); return; }
+
+        // Keepa処理済み（OK）で未取り込みのアイテムを取得
+        const newOkItems = run.items.filter(
+            i => i.status === ItemStatus.OK && i.priceAmount && i.title && !processedAsins.has(i.asin)
+        );
+
+        for (const item of newOkItems) {
+            processedAsins.add(item.asin);
+            const compItem: ComparisonItem = {
+                asin: item.asin,
+                amazonTitle: item.title!,
+                amazonPrice: item.priceAmount!,
+                amazonUrl: item.detailUrl || `https://www.amazon.co.jp/dp/${item.asin}`,
+                rakutenTitle: null, rakutenPrice: null, rakutenUrl: null,
+                rakutenShop: null, rakutenImageUrl: null, rakutenPointRate: 1,
+                similarityScore: 0, priceDiff: null, priceDiffPercent: null,
+                estimatedFee: estimateAmazonFee(item.priceAmount!),
+                estimatedProfit: null, profitRate: null,
+                status: 'PENDING' as ComparisonStatus,
+                janCode: item.janCode || null,
+                monthlySold: item.monthlySold || null,
+                memo: '', rakutenCandidates: [], favorite: false,
+            };
+            session.items.push(compItem);
+            session.stats.total = session.items.length;
+        }
+
+        // PENDINGアイテムの楽天比較を実行
+        const pendingItems = session.items.filter(i => i.status === 'PENDING');
+        for (const item of pendingItems) {
+            if (!session.isRunning) break;
+            try {
+                const rakutenResults = await searchRakuten(item.amazonTitle);
+                if (rakutenResults.length === 0) {
+                    item.status = 'NO_MATCH';
+                    session.stats.processed++;
+                    await delay(1100);
+                    continue;
+                }
+                const scoredResults = rakutenResults
+                    .map(rp => ({ ...rp, score: calculateSimilarity(item.amazonTitle, rp.itemName) }))
+                    .sort((a, b) => b.score - a.score)
+                    .filter(r => r.score >= 0.3)
+                    .slice(0, 3);
+                item.rakutenCandidates = scoredResults.map(r => ({
+                    title: r.itemName, price: r.itemPrice, url: r.itemUrl,
+                    shopName: r.shopName, imageUrl: r.imageUrl || '',
+                    pointRate: r.pointRate || 1, similarityScore: r.score,
+                }));
+                const bestMatch = scoredResults[0] || null;
+                const bestScore = bestMatch?.score || 0;
+                if (bestMatch && bestScore >= 0.8) {
+                    item.status = 'MATCHED';
+                    item.rakutenTitle = bestMatch.itemName;
+                    item.rakutenPrice = bestMatch.itemPrice;
+                    item.rakutenUrl = bestMatch.itemUrl;
+                    item.rakutenShop = bestMatch.shopName;
+                    item.rakutenImageUrl = bestMatch.imageUrl || null;
+                    item.rakutenPointRate = bestMatch.pointRate || 1;
+                    item.similarityScore = bestScore;
+                    item.priceDiff = bestMatch.itemPrice - item.amazonPrice;
+                    item.priceDiffPercent = Math.round(((bestMatch.itemPrice - item.amazonPrice) / item.amazonPrice) * 100);
+                    const fee = item.estimatedFee;
+                    const pointValue = Math.floor(item.amazonPrice * (item.rakutenPointRate / 100));
+                    item.estimatedProfit = item.amazonPrice - bestMatch.itemPrice - fee;
+                    item.profitRate = Math.round(((item.amazonPrice - bestMatch.itemPrice - fee) / item.amazonPrice) * 100);
+                    if (item.estimatedProfit > 0) session.stats.profitable++;
+                    session.stats.matched++;
+                } else {
+                    item.status = 'NO_MATCH';
+                }
+                session.stats.processed++;
+                await delay(1100);
+            } catch {
+                item.status = 'NO_MATCH';
+                session.stats.processed++;
+                await delay(1100);
+            }
+        }
+
+        // Keepa処理が完了し、全アイテム取り込み済みなら終了
+        if (!run.isRunning && newOkItems.length === 0 && pendingItems.length === 0) {
+            session.isRunning = false;
+            const compareUserId = (comparisons[session.id] as any)._userId;
+            if (compareUserId) saveComparisonToDB(session, compareUserId);
+            clearInterval(watchInterval);
+        }
+    }, 3000);
+
+    res.json({ compareId });
+});
+
 // runId に紐づく最新の compareId を返す
 app.get('/api/runs/:runId/compare', (req, res) => {
     const { runId } = req.params;

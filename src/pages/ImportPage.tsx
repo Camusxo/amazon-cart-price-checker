@@ -150,10 +150,12 @@ const ImportPage: React.FC = () => {
         setIsLoading(true);
         try {
             const res = await axios.post('/api/runs', { asins: textAsins });
-            const url = autoCompare
-                ? `/results/${res.data.runId}?autoCompare=true`
-                : `/results/${res.data.runId}`;
-            navigate(url);
+            if (autoCompare) {
+                const cmp = await axios.post('/api/auto-compare', { runId: res.data.runId });
+                navigate(`/compare/${cmp.data.compareId}`);
+            } else {
+                navigate(`/results/${res.data.runId}`);
+            }
         } catch (err: unknown) {
             const error = err as { response?: { data?: { error?: string } } };
             setError(error.response?.data?.error || '処理開始に失敗しました');
@@ -167,10 +169,12 @@ const ImportPage: React.FC = () => {
         setIsLoading(true);
         try {
             const res = await axios.post('/api/runs', { asins: selected.map(r => r.asin) });
-            const url = autoCompare
-                ? `/results/${res.data.runId}?autoCompare=true`
-                : `/results/${res.data.runId}`;
-            navigate(url);
+            if (autoCompare) {
+                const cmp = await axios.post('/api/auto-compare', { runId: res.data.runId });
+                navigate(`/compare/${cmp.data.compareId}`);
+            } else {
+                navigate(`/results/${res.data.runId}`);
+            }
         } catch (err: unknown) {
             const error = err as { response?: { data?: { error?: string } } };
             setError(error.response?.data?.error || '処理開始に失敗しました');
@@ -216,10 +220,12 @@ const ImportPage: React.FC = () => {
         setIsLoading(true);
         try {
             const res = await axios.post('/api/runs', { asins: selected });
-            const url = autoCompare
-                ? `/results/${res.data.runId}?autoCompare=true`
-                : `/results/${res.data.runId}`;
-            navigate(url);
+            if (autoCompare) {
+                const cmp = await axios.post('/api/auto-compare', { runId: res.data.runId });
+                navigate(`/compare/${cmp.data.compareId}`);
+            } else {
+                navigate(`/results/${res.data.runId}`);
+            }
         } catch (err: unknown) {
             const error = err as { response?: { data?: { error?: string } } };
             setError(error.response?.data?.error || '処理開始に失敗しました');
@@ -493,10 +499,12 @@ const ImportPage: React.FC = () => {
                     rows: originalCsvData.rows,
                 },
             });
-            const url = autoCompare
-                ? `/results/${res.data.runId}?autoCompare=true`
-                : `/results/${res.data.runId}`;
-            navigate(url);
+            if (autoCompare) {
+                const cmp = await axios.post('/api/auto-compare', { runId: res.data.runId });
+                navigate(`/compare/${cmp.data.compareId}`);
+            } else {
+                navigate(`/results/${res.data.runId}`);
+            }
         } catch (err: unknown) {
             const error = err as { response?: { data?: { error?: string } } };
             setError(error.response?.data?.error || 'サーバーでの処理開始に失敗しました。');
