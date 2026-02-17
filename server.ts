@@ -1099,7 +1099,8 @@ app.post('/api/keepa-query', authMiddleware, async (req, res) => {
     }
 
     // catchブロックでも参照するため、try外で宣言
-    const maxResults = req.body.maxResults || 5000;
+    const tokenBudget = req.body.tokenBudget || 0; // 0=制限なし
+    const maxResults = tokenBudget > 0 ? Math.min(tokenBudget, req.body.maxResults || 5000) : (req.body.maxResults || 5000);
     const maxPages = Math.min(req.body.maxPages || 50, 50);
     let allAsinList: string[] = [];
     let totalResults = 0;
@@ -1582,6 +1583,20 @@ app.post('/api/compare-now', (req, res) => {
 
     processComparisonQueue(compareId);
     res.json({ compareId, itemCount: okItems.length });
+});
+
+// runId に紐づく最新の compareId を返す
+app.get('/api/runs/:runId/compare', (req, res) => {
+    const { runId } = req.params;
+    // 新しい順に探す
+    const found = Object.values(comparisons)
+        .filter(c => c.runId === runId)
+        .sort((a, b) => b.createdAt - a.createdAt);
+    if (found.length > 0) {
+        res.json({ compareId: found[0].id });
+    } else {
+        res.json({ compareId: null });
+    }
 });
 
 app.get('/api/compare/:compareId', async (req, res) => {

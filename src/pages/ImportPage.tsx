@@ -83,6 +83,8 @@ const ImportPage: React.FC = () => {
     const [querySelection, setQuerySelection] = useState<any>(null);
     const [querySelectedAsins, setQuerySelectedAsins] = useState<Set<string>>(new Set());
     const [querySelectCount, setQuerySelectCount] = useState('');
+    const [queryTokenBudget, setQueryTokenBudget] = useState('');
+    const [queryTokensInfo, setQueryTokensInfo] = useState<{ left: number; consumed: number } | null>(null);
 
     // Keepa検索用
     const [keepaKeyword, setKeepaKeyword] = useState('');
@@ -184,17 +186,22 @@ const ImportPage: React.FC = () => {
         setQuerySelection(null);
         setQuerySelectedAsins(new Set());
         setQuerySelectCount('');
+        setQueryTokensInfo(null);
         try {
-            const res = await axios.post('/api/keepa-query', { queryUrl: queryUrl.trim() });
+            const budget = parseInt(queryTokenBudget, 10);
+            const payload: any = { queryUrl: queryUrl.trim() };
+            if (budget > 0) payload.tokenBudget = budget;
+            const res = await axios.post('/api/keepa-query', payload);
             const asins: string[] = res.data.asinList;
             setQueryResults(asins);
             setQueryTotalResults(res.data.totalResults);
             setQuerySelection(res.data.selection);
+            setQueryTokensInfo({ left: res.data.tokensLeft || 0, consumed: res.data.tokensConsumed || 0 });
             // デフォルトは全選択
             setQuerySelectedAsins(new Set(asins));
             // トークン不足で全件取得できなかった場合の注意
             if (res.data.totalResults > res.data.returnedCount) {
-                setQueryError(`注意: 合計${res.data.totalResults.toLocaleString()}件中、APIトークンの制限により${res.data.returnedCount.toLocaleString()}件のみ取得されました。トークン回復後に再実行すると追加取得できます。`);
+                setQueryError(`注意: 合計${res.data.totalResults.toLocaleString()}件中、${res.data.returnedCount.toLocaleString()}件のみ取得されました。${res.data.warning ? res.data.warning : 'トークン回復後に再実行すると追加取得できます。'}`);
             }
         } catch (err: unknown) {
             const error = err as { response?: { data?: { error?: string } } };
@@ -842,6 +849,10 @@ const ImportPage: React.FC = () => {
                             <p className="text-blue-600">
                                 KeepaのProduct FinderクエリURLを貼り付けて、条件に合うASINを一括取得します。
                             </p>
+                            <p className="text-blue-500 mt-1.5 text-xs">
+                                <strong>トークン節約のコツ:</strong> 「取得上限」で件数を制限 → 結果から必要な件数だけ選択 → 「カート価格のみ」で高速チェック。
+                                大量件数の場合はKeepa側で「Amazon本体なし」「売上ランク○○位以内」等を絞り込んでからクエリすると効果的です。
+                            </p>
                         </div>
                     </div>
 
@@ -855,17 +866,36 @@ const ImportPage: React.FC = () => {
                             rows={3}
                             className="w-full px-4 py-3 border border-slate-300 rounded-xl font-mono text-xs focus:ring-2 focus:ring-indigo-400 focus:border-transparent outline-none resize-y"
                         />
-                        <button
-                            onClick={handleKeepaQuery}
-                            disabled={queryExecuting || !queryUrl.trim()}
-                            className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50 flex items-center gap-2"
-                        >
-                            {queryExecuting ? (
-                                <><Loader2 className="w-4 h-4 animate-spin" /> クエリ実行中...</>
-                            ) : (
-                                'クエリ実行'
-                            )}
-                        </button>
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={handleKeepaQuery}
+                                disabled={queryExecuting || !queryUrl.trim()}
+                                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50 flex items-center gap-2"
+                            >
+                                {queryExecuting ? (
+                                    <><Loader2 className="w-4 h-4 animate-spin" /> クエリ実行中...</>
+                                ) : (
+                                    'クエリ実行'
+                                )}
+                            </button>
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-xs text-slate-500">取得上限:</span>
+                                <input
+                                    type="number" min="100" step="100"
+                                    value={queryTokenBudget}
+                                    onChange={e => setQueryTokenBudget(e.target.value)}
+                                    placeholder="無制限"
+                                    className="w-24 px-2 py-1.5 text-xs border border-slate-300 rounded-md focus:ring-1 focus:ring-indigo-400 outline-none"
+                                />
+                                <span className="text-xs text-slate-400">件</span>
+                            </div>
+                        </div>
+                        {queryTokensInfo && (
+                            <div className="text-xs text-slate-500 flex gap-4">
+                                <span>クエリ消費トークン: <strong className="text-slate-700">{queryTokensInfo.consumed}</strong></span>
+                                <span>残りトークン: <strong className={queryTokensInfo.left < 100 ? 'text-red-600' : 'text-green-600'}>{queryTokensInfo.left}</strong></span>
+                            </div>
+                        )}
                     </div>
 
                     {/* エラー表示 */}
@@ -957,7 +987,14 @@ const ImportPage: React.FC = () => {
                                     />
                                     <span className="text-xs text-slate-400">件を選択</span>
                                     <span className="ml-auto text-xs text-amber-600">
-                                        推定トークン消費: 約{querySelectedAsins.size}トークン
+                                        推定トークン消費: 約{querySelectedAsins.size * 2}トークン（{querySelectedAsins.size}件）
+                                        {queryTokensInfo && queryTokensInfo.left > 0 && (
+                                            <span className={querySelectedAsins.size * 2 > queryTokensInfo.left ? ' text-red-600 font-bold' : ''}>
+                                                {querySelectedAsins.size * 2 > queryTokensInfo.left
+                                                    ? ` | 残量不足（残${queryTokensInfo.left}）`
+                                                    : ` | 残量OK（残${queryTokensInfo.left}）`}
+                                            </span>
+                                        )}
                                     </span>
                                 </div>
                             </div>

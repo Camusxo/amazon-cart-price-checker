@@ -13,6 +13,7 @@ import {
     GitCompareArrows,
     Loader2,
     Square,
+    ArrowRightLeft,
 } from 'lucide-react';
 import { RunSession, ItemStatus, OriginalCsvData } from '../types';
 import { getStatusColor, formatCurrency } from '../lib/utils';
@@ -33,6 +34,7 @@ const RunPage: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [startingCompare, setStartingCompare] = useState(false);
     const [autoCompareTriggered, setAutoCompareTriggered] = useState(false);
+    const [linkedCompareId, setLinkedCompareId] = useState<string | null>(null);
 
     const fetchData = async () => {
         try {
@@ -53,6 +55,14 @@ const RunPage: React.FC = () => {
         }, 2000);
         return () => clearInterval(interval);
     }, [runId, data?.isRunning]);
+
+    // 紐づく比較セッションを取得
+    useEffect(() => {
+        if (!runId) return;
+        axios.get(`/api/runs/${runId}/compare`).then(res => {
+            setLinkedCompareId(res.data.compareId || null);
+        }).catch(() => {});
+    }, [runId, startingCompare]);
 
     // autoCompare=true の場合、Keepa処理が全件完了してから楽天比較を開始
     useEffect(() => {
@@ -257,6 +267,12 @@ const RunPage: React.FC = () => {
                                 ) : (
                                     <><GitCompareArrows className="w-4 h-4" /> 楽天比較を開始</>
                                 )}
+                            </button>
+                        )}
+                        {linkedCompareId && (
+                            <button onClick={() => navigate(`/compare/${linkedCompareId}`)}
+                                className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-rose-500 hover:bg-rose-600 rounded-md transition-colors">
+                                <ArrowRightLeft className="w-4 h-4" /> 比較結果を見る
                             </button>
                         )}
                         {data.stats.failed > 0 && !data.isRunning && (

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import Papa from 'papaparse';
 import {
@@ -14,6 +14,7 @@ import {
     Square,
     Play,
     CheckCircle,
+    ArrowRightLeft,
 } from 'lucide-react';
 import { ComparisonSession, ComparisonItem } from '../types';
 import { formatCurrency } from '../lib/utils';
@@ -30,6 +31,7 @@ interface SavedFilter {
 
 const ComparePage: React.FC = () => {
     const { compareId } = useParams();
+    const navigate = useNavigate();
     const [data, setData] = useState<ComparisonSession | null>(null);
     const [loading, setLoading] = useState(true);
 
@@ -398,6 +400,12 @@ const ComparePage: React.FC = () => {
                         </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
+                        {data.runId && (
+                            <button onClick={() => navigate(`/results/${data.runId}`)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors border border-amber-200">
+                                <ArrowRightLeft className="w-3.5 h-3.5" /> Keepa結果に戻る
+                            </button>
+                        )}
                         {data.isRunning && (
                             <>
                                 <button onClick={handleStop} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors">
