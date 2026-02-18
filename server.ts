@@ -766,7 +766,7 @@ const getBigrams = (str: string): Set<string> => {
     return bigrams;
 };
 
-const calculateSimilarity = (str1: string, str2: string): number => {
+const calculateBigramSimilarity = (str1: string, str2: string): number => {
     if (!str1 || !str2) return 0;
     const bigrams1 = getBigrams(str1);
     const bigrams2 = getBigrams(str2);
@@ -778,6 +778,117 @@ const calculateSimilarity = (str1: string, str2: string): number => {
     });
 
     return (2 * intersection) / (bigrams1.size + bigrams2.size);
+};
+
+// --- 高精度マッチングシステム（一致率95%以上対応） ---
+
+// 型番・規格番号を抽出（例: ABC-123, X100V, KJ-55X85K, NW-A306）
+const extractModelNumbers = (title: string): string[] => {
+    const models: string[] = [];
+    // アルファベット+数字の型番パターン（ハイフン含む）
+    const patterns = [
+        /[A-Z]{1,6}[-]?\d{2,6}[A-Z]{0,3}/gi,          // ABC-123, KJ55X85K
+        /[A-Z]{1,3}\d{1,3}[-]\d{1,6}[A-Z]?/gi,        // NW-A306, WH-1000XM5
+        /\d{2,4}[-][A-Z]{1,4}\d{0,4}/gi,               // 55-X85K
+        /[A-Z]\d{3,5}[A-Z]{0,2}/gi,                    // A306, X100V
+    ];
+    for (const pattern of patterns) {
+        const matches = title.match(pattern) || [];
+        for (const m of matches) {
+            const normalized = m.toUpperCase().replace(/-/g, '');
+            if (normalized.length >= 3 && !models.includes(normalized)) {
+                models.push(normalized);
+            }
+        }
+    }
+    return models;
+};
+
+// 容量・サイズ・個数などのスペック情報を抽出
+const extractSpecs = (title: string): string[] => {
+    const specs: string[] = [];
+    // 容量・重量
+    const specPatterns = [
+        /\d+(?:\.\d+)?(?:ml|ML|ml|mL|リットル|L|l)/gi,
+        /\d+(?:\.\d+)?(?:g|kg|KG|グラム)/gi,
+        /\d+(?:\.\d+)?(?:cm|mm|m|インチ|型)/gi,
+        /\d+(?:個|枚|本|入|袋|箱|パック|セット|錠|粒|包|回分)/gi,
+        /(?:S|M|L|XL|XXL|LL|3L|4L|5L)サイズ/gi,
+        /第\d+世代/gi,
+        /\d{4}年(?:モデル|版|製)/gi,
+        /[Vv](?:er)?\.?\s?\d+(?:\.\d+)?/gi,   // v2, Ver.3, v1.5
+    ];
+    for (const pattern of specPatterns) {
+        const matches = title.match(pattern) || [];
+        for (const m of matches) {
+            const normalized = m.toLowerCase().replace(/\s/g, '');
+            if (!specs.includes(normalized)) {
+                specs.push(normalized);
+            }
+        }
+    }
+    return specs;
+};
+
+// ブランド名の正規化抽出（先頭の主要ワードをブランド候補として取得）
+const extractBrandHint = (title: string): string => {
+    // カッコや記号を除去してから先頭ワードを取得
+    const cleaned = title.replace(/[\[\]【】（）()「」『』]/g, ' ').trim();
+    const words = cleaned.split(/\s+/).filter(w => w.length > 0);
+    // 先頭1〜2ワードをブランド候補として返す（日本語商品名の慣習）
+    return words.slice(0, 2).join(' ').toLowerCase();
+};
+
+// 高精度類似度計算（型番・スペック・ブランドを加味）
+const calculateSimilarity = (amazonTitle: string, rakutenTitle: string): number => {
+    // Step 1: 基本bigram類似度
+    const bigramScore = calculateBigramSimilarity(amazonTitle, rakutenTitle);
+
+    // Step 2: 型番チェック（致命的な不一致で大幅減点）
+    const amazonModels = extractModelNumbers(amazonTitle);
+    const rakutenModels = extractModelNumbers(rakutenTitle);
+
+    let modelPenalty = 0;
+    if (amazonModels.length > 0 && rakutenModels.length > 0) {
+        // 両方に型番がある場合、少なくとも1つは一致する必要がある
+        const hasModelMatch = amazonModels.some(am =>
+            rakutenModels.some(rm => am === rm || am.includes(rm) || rm.includes(am))
+        );
+        if (!hasModelMatch) {
+            // 型番が1つも一致しない → 別商品の可能性が極めて高い
+            modelPenalty = 0.30;
+        }
+    }
+
+    // Step 3: スペックチェック（容量・サイズ不一致で減点）
+    const amazonSpecs = extractSpecs(amazonTitle);
+    const rakutenSpecs = extractSpecs(rakutenTitle);
+
+    let specPenalty = 0;
+    if (amazonSpecs.length > 0 && rakutenSpecs.length > 0) {
+        // 同じカテゴリのスペックが異なる場合に減点
+        const specMatch = amazonSpecs.some(as =>
+            rakutenSpecs.some(rs => as === rs)
+        );
+        if (!specMatch) {
+            specPenalty = 0.15;
+        }
+    }
+
+    // Step 4: ブランドチェック
+    const amazonBrand = extractBrandHint(amazonTitle);
+    const rakutenBrand = extractBrandHint(rakutenTitle);
+    let brandPenalty = 0;
+    if (amazonBrand && rakutenBrand) {
+        const brandSim = calculateBigramSimilarity(amazonBrand, rakutenBrand);
+        if (brandSim < 0.4) {
+            brandPenalty = 0.10;
+        }
+    }
+
+    // 最終スコア = bigram類似度 - 各種ペナルティ
+    const finalScore = Math.max(0, bigramScore - modelPenalty - specPenalty - brandPenalty);
+    return finalScore;
 };
 
 // Amazon手数料概算（販売手数料15% + FBA配送代行手数料）
@@ -821,7 +932,7 @@ const processComparisonItem = async (item: ComparisonItem, session: ComparisonSe
                 score: calculateSimilarity(item.amazonTitle, rp.itemName)
             }))
             .sort((a, b) => b.score - a.score)
-            .filter(r => r.score >= 0.3)
+            .filter(r => r.score >= 0.5)  // 候補の最低閾値50%
             .slice(0, 3);
 
         item.rakutenCandidates = scoredResults.map(r => ({
@@ -837,26 +948,39 @@ const processComparisonItem = async (item: ComparisonItem, session: ComparisonSe
         const bestMatch = scoredResults[0] || null;
         const bestScore = bestMatch?.score || 0;
 
-        if (bestMatch && bestScore >= 0.8) {
-            item.status = 'MATCHED';
-            item.rakutenTitle = bestMatch.itemName;
-            item.rakutenPrice = bestMatch.itemPrice;
-            item.rakutenUrl = bestMatch.itemUrl;
-            item.rakutenShop = bestMatch.shopName;
-            item.rakutenImageUrl = bestMatch.imageUrl;
-            item.rakutenPointRate = bestMatch.pointRate;
-            item.similarityScore = bestScore;
+        // 一致率95%以上 + 楽天価格がAmazon以下の場合のみMATCHED
+        const MATCH_THRESHOLD = 0.95;
+        if (bestMatch && bestScore >= MATCH_THRESHOLD) {
+            // 楽天の方が高い場合は利益が出ないのでNO_MATCHとして扱う
+            if (bestMatch.itemPrice >= item.amazonPrice) {
+                item.status = 'NO_MATCH';
+                item.rakutenTitle = bestMatch.itemName;
+                item.rakutenPrice = bestMatch.itemPrice;
+                item.rakutenUrl = bestMatch.itemUrl;
+                item.rakutenShop = bestMatch.shopName;
+                item.similarityScore = bestScore;
+                item.errorMessage = '楽天価格がAmazon以上のため除外';
+            } else {
+                item.status = 'MATCHED';
+                item.rakutenTitle = bestMatch.itemName;
+                item.rakutenPrice = bestMatch.itemPrice;
+                item.rakutenUrl = bestMatch.itemUrl;
+                item.rakutenShop = bestMatch.shopName;
+                item.rakutenImageUrl = bestMatch.imageUrl;
+                item.rakutenPointRate = bestMatch.pointRate;
+                item.similarityScore = bestScore;
 
-            item.priceDiff = item.amazonPrice - bestMatch.itemPrice;
-            item.priceDiffPercent = Math.round(((item.amazonPrice - bestMatch.itemPrice) / item.amazonPrice) * 100 * 10) / 10;
+                item.priceDiff = item.amazonPrice - bestMatch.itemPrice;
+                item.priceDiffPercent = Math.round(((item.amazonPrice - bestMatch.itemPrice) / item.amazonPrice) * 100 * 10) / 10;
 
-            item.estimatedFee = estimateAmazonFee(item.amazonPrice);
-            item.estimatedProfit = item.amazonPrice - bestMatch.itemPrice - item.estimatedFee;
-            item.profitRate = Math.round((item.estimatedProfit / item.amazonPrice) * 100 * 10) / 10;
+                item.estimatedFee = estimateAmazonFee(item.amazonPrice);
+                item.estimatedProfit = item.amazonPrice - bestMatch.itemPrice - item.estimatedFee;
+                item.profitRate = Math.round((item.estimatedProfit / item.amazonPrice) * 100 * 10) / 10;
 
-            session.stats.matched++;
-            if (item.estimatedProfit > 0) {
-                session.stats.profitable++;
+                session.stats.matched++;
+                if (item.estimatedProfit > 0) {
+                    session.stats.profitable++;
+                }
             }
         } else {
             item.status = 'NO_MATCH';
